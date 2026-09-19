@@ -14,6 +14,11 @@ ENV LANG=C.UTF-8
 # to resolving "latest" at build time. Reference args only as ${NAME} or
 # ${NAME:-fallback} - the Apptainer def converter textually substitutes them
 # (see dockerfile_to_def.py --build-arg).
+# (see dockerfile_to_def.py --build-arg). The *_SHA256 args are refreshed
+# together with the versions and carry per-arch checksums
+# "amd64=<hex>,arm64=<hex>" for the direct downloads: verified after
+# download when present, loudly skipped when not. Tools installed through
+# npm/uv are integrity-verified by the package manager itself.
 ARG NODE_VERSION=""
 ARG YQ_VERSION=""
 ARG GH_VERSION=""
@@ -24,6 +29,12 @@ ARG OPENCODE_VERSION=""
 ARG CLAUDE_CODE_VERSION=""
 ARG CODEX_VERSION=""
 ARG PI_VERSION=""
+ARG NODE_SHA256=""
+ARG YQ_SHA256=""
+ARG GH_SHA256=""
+ARG TYPST_SHA256=""
+ARG UV_SHA256=""
+ARG BUN_SHA256=""
 
 # Basic setup + CLI utilities
 RUN apt-get update && apt-get install -y \
@@ -50,6 +61,8 @@ RUN arch="$(dpkg --print-architecture)" \
     esac \
     && node_version="${NODE_VERSION:-$(curl -fsSL https://nodejs.org/dist/index.json | jq -r --arg node_arch "$node_arch" 'map(select(.files | index("linux-" + $node_arch))) | .[0].version')}" \
     && curl -fsSL "https://nodejs.org/dist/${node_version}/node-${node_version}-linux-${node_arch}.tar.xz" -o /tmp/node.tar.xz \
+    && node_sha="$(printf '%s\n' "${NODE_SHA256}" | tr ',' '\n' | sed -n "s/^${node_arch}=//p")" \
+    && if [ -n "$node_sha" ]; then printf '%s  %s\n' "$node_sha" /tmp/node.tar.xz | sha256sum -c -; else echo "warning: node downloaded without a checksum pin" >&2; fi \
     && mkdir -p /opt/node \
     && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 \
     && ln -sf /opt/node/bin/node /usr/local/bin/node \
@@ -65,6 +78,8 @@ RUN arch="$(dpkg --print-architecture)" \
     esac \
     && yq_version="${YQ_VERSION:-$(curl -fsSL https://api.github.com/repos/mikefarah/yq/releases/latest | jq -r '.tag_name | ltrimstr("v")')}" \
     && curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${yq_version}/yq_linux_${yq_arch}" -o /usr/local/bin/yq \
+    && yq_sha="$(printf '%s\n' "${YQ_SHA256}" | tr ',' '\n' | sed -n "s/^${yq_arch}=//p")" \
+    && if [ -n "$yq_sha" ]; then printf '%s  %s\n' "$yq_sha" /usr/local/bin/yq | sha256sum -c -; else echo "warning: yq downloaded without a checksum pin" >&2; fi \
     && chmod +x /usr/local/bin/yq
 
 RUN arch="$(dpkg --print-architecture)" \
@@ -75,6 +90,8 @@ RUN arch="$(dpkg --print-architecture)" \
     esac \
     && gh_version="${GH_VERSION:-$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r '.tag_name | ltrimstr("v")')}" \
     && curl -fsSL "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_${gh_arch}.tar.gz" -o /tmp/gh.tar.gz \
+    && gh_sha="$(printf '%s\n' "${GH_SHA256}" | tr ',' '\n' | sed -n "s/^${gh_arch}=//p")" \
+    && if [ -n "$gh_sha" ]; then printf '%s  %s\n' "$gh_sha" /tmp/gh.tar.gz | sha256sum -c -; else echo "warning: gh downloaded without a checksum pin" >&2; fi \
     && tar -xzf /tmp/gh.tar.gz -C /tmp \
     && install -m 0755 "/tmp/gh_${gh_version}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh \
     && rm -rf /tmp/gh.tar.gz "/tmp/gh_${gh_version}_linux_${gh_arch}"
@@ -87,18 +104,32 @@ RUN arch="$(dpkg --print-architecture)" \
     esac \
     && typst_version="${TYPST_VERSION:-$(curl -fsSL https://api.github.com/repos/typst/typst/releases/latest | jq -r '.tag_name | ltrimstr("v")')}" \
     && curl -fsSL "https://github.com/typst/typst/releases/download/v${typst_version}/typst-${typst_arch}-unknown-linux-musl.tar.xz" -o /tmp/typst.tar.xz \
+    && typst_sha="$(printf '%s\n' "${TYPST_SHA256}" | tr ',' '\n' | sed -n "s/^${typst_arch}=//p")" \
+    && if [ -n "$typst_sha" ]; then printf '%s  %s\n' "$typst_sha" /tmp/typst.tar.xz | sha256sum -c -; else echo "warning: typst downloaded without a checksum pin" >&2; fi \
     && tar -xJf /tmp/typst.tar.xz -C /tmp \
     && install -m 0755 "/tmp/typst-${typst_arch}-unknown-linux-musl/typst" /usr/local/bin/typst \
     && rm -rf /tmp/typst.tar.xz "/tmp/typst-${typst_arch}-unknown-linux-musl"
 
-# uv: versioned installer URL when pinned (plain installer resolves latest).
-RUN if [ -n "$UV_VERSION" ]; then \
-        uv_installer="https://astral.sh/uv/${UV_VERSION}/install.sh"; \
+# uv: pinned release tarball, checksum-verified when a pin is present
+# (the plain installer resolves latest, unverified).
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) uv_arch="x86_64" ;; \
+        arm64) uv_arch="aarch64" ;; \
+        *) echo "Unsupported architecture for uv: $arch" >&2; exit 1 ;; \
+    esac \
+    && if [ -n "$UV_VERSION" ]; then \
+        curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${uv_arch}-unknown-linux-gnu.tar.gz" -o /tmp/uv.tar.gz \
+        && uv_sha="$(printf '%s\n' "${UV_SHA256}" | tr ',' '\n' | sed -n "s/^${uv_arch}=//p")" \
+        && if [ -n "$uv_sha" ]; then printf '%s  %s\n' "$uv_sha" /tmp/uv.tar.gz | sha256sum -c -; else echo "warning: uv downloaded without a checksum pin" >&2; fi \
+        && tar -xzf /tmp/uv.tar.gz -C /tmp \
+        && install -m 0755 "/tmp/uv-${uv_arch}-unknown-linux-gnu/uv" /usr/local/bin/uv \
+        && install -m 0755 "/tmp/uv-${uv_arch}-unknown-linux-gnu/uvx" /usr/local/bin/uvx \
+        && rm -rf /tmp/uv.tar.gz "/tmp/uv-${uv_arch}-unknown-linux-gnu"; \
     else \
-        uv_installer="https://astral.sh/uv/install.sh"; \
-    fi \
-    && curl -LsSf "$uv_installer" \
-    | env UV_UNMANAGED_INSTALL="/usr/local/bin" sh
+        curl -LsSf https://astral.sh/uv/install.sh \
+        | env UV_UNMANAGED_INSTALL="/usr/local/bin" sh; \
+    fi
 
 # bun: pinned release asset (fallback: latest tag from the GitHub API).
 RUN arch="$(dpkg --print-architecture)" \
@@ -109,6 +140,8 @@ RUN arch="$(dpkg --print-architecture)" \
     esac \
     && bun_version="${BUN_VERSION:-$(curl -fsSL https://api.github.com/repos/oven-sh/bun/releases/latest | jq -r '.tag_name | ltrimstr("bun-v")')}" \
     && curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${bun_version}/bun-linux-${bun_arch}.zip" -o /tmp/bun.zip \
+    && bun_sha="$(printf '%s\n' "${BUN_SHA256}" | tr ',' '\n' | sed -n "s/^${bun_arch}=//p")" \
+    && if [ -n "$bun_sha" ]; then printf '%s  %s\n' "$bun_sha" /tmp/bun.zip | sha256sum -c -; else echo "warning: bun downloaded without a checksum pin" >&2; fi \
     && unzip -q /tmp/bun.zip -d /tmp \
     && install -m 0755 "/tmp/bun-linux-${bun_arch}/bun" /usr/local/bin/bun \
     && rm -rf /tmp/bun.zip "/tmp/bun-linux-${bun_arch}"
