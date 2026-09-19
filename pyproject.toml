@@ -2,14 +2,51 @@
 name = "agentic-workspace"
 version = "1.0.0"
 description = "Sandboxed AI coding agent harness: one command, many agents."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [{ name = "Attila Karsai", email = "50205381+akarsai@users.noreply.github.com" }]
 requires-python = ">=3.10"
-dependencies = ["pyyaml>=6.0"]
+dependencies = ["pyyaml>=6"]
+keywords = [
+    "ai",
+    "agents",
+    "coding-agent",
+    "llm",
+    "sandbox",
+    "docker",
+    "apptainer",
+    "hpc",
+    "slurm",
+    "developer-tools",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: System :: Emulators",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Repository = "https://github.com/akarsai/agentic-workspace"
+Issues = "https://github.com/akarsai/agentic-workspace/issues"
+Changelog = "https://github.com/akarsai/agentic-workspace/releases"
 
 [project.scripts]
 agentic-workspace = "agentic_workspace.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8"]
 
 [build-system]
 requires = ["hatchling"]
@@ -17,6 +54,19 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentic_workspace"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/blueprint",
+    "/instances",
+    "/README.md",
+    "/LICENSE",
+    "/THIRD_PARTY_NOTICES.md",
+    "/agentic-workspace",
+    "/pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

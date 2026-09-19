@@ -21,3 +21,6 @@ __pycache__/
 AGENTS.md
 CLAUDE.md
 GEMINI.md
+
+# Instructor-provided textbook PDFs (copyrighted, never commit)
+books/
