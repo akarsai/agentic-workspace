@@ -1,0 +1,19 @@
+# agentic-blueprint instance manifest
+# agentic-workspace instance manifest (created via the scaffold command)
+name: worka
+description: Workspace services agent for improving the agentic-workspace repo
+version: "1.0.0"
+
+# Docker image tag built for this instance (child container/Dockerfile).
+image: worka:latest
+
+# CLI tool executed inside the container.
+tool: pi
+
+# Instruction template copied into the workspace (name = launcher arg).
+instruction_template: INSTRUCTIONS.md
+instruction_target: AGENTS.md
+
+# Slash commands installed for the tool (one markdown file each in commands/).
+commands: subagent, clone-writing-style
+

@@ -1,0 +1,27 @@
+#!/bin/sh
+# agre: launch the agre research agent in a sandboxed container.
+#
+# Thin POSIX-sh launcher for the agentic-workspace monorepo: sets AGENT_ROOT
+# (this instance's directory) and hands off to the shared `agentic-workspace
+# launch` command. Identity (image, tool, commands) is defined in this
+# instance's manifest.yaml.
+#
+# Usage: agre [OPTIONS] [DIRECTORY] [TOOL_OPTIONS...]
+# Run with --help for details.
+SELF=$0
+case $SELF in
+    */*) ;;
+    *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
+esac
+while [ -L "$SELF" ]; do
+    LINK=$(readlink "$SELF") || break
+    case $LINK in
+        /*) SELF=$LINK ;;
+        *) SELF=$(dirname "$SELF")/$LINK ;;
+    esac
+done
+AGENT_ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
+export AGENT_ROOT
+ROOT=$(CDPATH= cd -- "$AGENT_ROOT/../.." && pwd)
+
+exec "$ROOT/agentic-workspace" launch "$@"

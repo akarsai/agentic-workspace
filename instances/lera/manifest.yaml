@@ -1,0 +1,18 @@
+# lera -- agentic-blueprint instance manifest.
+# Identity for the university teaching agent; the generic launcher reads this file.
+name: lera
+description: "University teaching agent for mathematical courses: course profiles distilled from the textbook, exercise sheets and solutions in the instructor's own style"
+version: "0.2.0"
+
+# Docker image tag built for this instance (container/Dockerfile).
+image: lera:latest
+
+# CLI tool executed inside the container.
+tool: pi
+
+# Instruction template copied into the workspace (target name = AGENTS.md).
+instruction_template: INSTRUCTIONS.md
+instruction_target: AGENTS.md
+
+# Slash commands installed for the tool (one markdown file each in commands/).
+commands: course, sheet, style, subagent, retro, update_base

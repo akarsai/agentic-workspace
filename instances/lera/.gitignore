@@ -1,0 +1,23 @@
+# Scratch space inside the workspace (never write to /tmp)
+.tmp/
+*.log
+
+# Pi agent skills rendered into the workspace at launch
+.agents/
+
+# Editor / OS
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated instruction file (copied from INSTRUCTIONS.md at launch)
+AGENTS.md
+CLAUDE.md
+GEMINI.md

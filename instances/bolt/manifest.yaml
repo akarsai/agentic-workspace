@@ -1,0 +1,19 @@
+# agentic-blueprint instance manifest
+# Identity for the web-app builder; the generic launcher reads this file.
+name: bolt
+description: "Web app builder: small full-stack apps with TypeScript, modern frameworks, tests, and clean commits"
+version: "1.0.0"
+
+# Docker image tag built for this instance (child container/Dockerfile).
+image: bolt:latest
+
+# CLI tool executed inside the container.
+tool: pi
+
+# Instruction template copied into the workspace (name = launcher arg).
+instruction_template: INSTRUCTIONS.md
+instruction_target: AGENTS.md
+
+# Slash commands installed for the tool (one markdown file each in commands/).
+commands: plan, review, clone-writing-style
+

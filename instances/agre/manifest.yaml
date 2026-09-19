@@ -1,0 +1,19 @@
+# agre -- agentic-blueprint instance manifest.
+# Identity for the research harness; the generic launcher reads this file.
+name: agre
+description: Research agent for mathematics and machine learning
+version: "0.5.0"
+
+# Docker image tag built for this instance (container/Dockerfile).
+image: agre:latest
+
+# CLI tool executed inside the container.
+tool: pi
+
+# Instruction template copied into the workspace (target name = AGENTS.md).
+instruction_template: INSTRUCTIONS.md
+instruction_target: AGENTS.md
+
+# Slash commands installed for the tool (one markdown file each in commands/).
+commands: retro, update_base, subagent, clone-writing-style
+

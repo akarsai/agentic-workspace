@@ -1,0 +1,33 @@
+#!/bin/sh
+# agentic-workspace: bootstrap the CLI via uv.
+#
+# This shim is plain POSIX sh on purpose: it must run before any runtime
+# exists. uv installs and manages the project's Python (>=3.10) automatically,
+# so `sh` + `uv` are the only host requirements.
+#
+# Usage:
+#   ./agentic-workspace <subcommand> [options]
+#
+# Subcommands: launch, install, build, update, scaffold, setup, clean, uninstall.
+SELF=$0
+case $SELF in
+    */*) ;;
+    *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
+esac
+# Resolve symlinks (instance launchers are symlinked into ~/.local/bin).
+while [ -L "$SELF" ]; do
+    LINK=$(readlink "$SELF") || break
+    case $LINK in
+        /*) SELF=$LINK ;;
+        *) SELF=$(dirname "$SELF")/$LINK ;;
+    esac
+done
+ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "Error: 'uv' is not installed or not on PATH." >&2
+    echo "  Install it: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    exit 1
+fi
+
+exec uv run --project "$ROOT" agentic-workspace "$@"

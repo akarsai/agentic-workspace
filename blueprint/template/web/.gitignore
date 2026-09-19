@@ -1,0 +1,48 @@
+# Scratch space inside the workspace (never write to /tmp)
+.tmp/
+*.log
+
+# Pi agent skills rendered into the workspace at launch
+.agents/
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.next/
+out/
+.turbo/
+.temp/
+
+# Tests / coverage
+coverage/
+.playwright/
+test-results/
+.vitest/
+
+# TypeScript
+*.tsbuildinfo
+*.d.ts.map
+*.js.map
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Editor / OS
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Generated instruction file (copied from INSTRUCTIONS.md at launch)
+AGENTS.md
+CLAUDE.md
+GEMINI.md

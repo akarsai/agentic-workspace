@@ -1,0 +1,162 @@
+FROM ubuntu:26.04
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
+
+# Pinned tool versions, refreshed by `./agentic-workspace update` into
+# blueprint/container/versions.json (clone-local, gitignored) and passed as
+# build args. Docker freezes a RUN layer until its command text changes, so
+# the pins are what actually moves a tool: a changed version busts the layer
+# cache for that step. Empty args (fresh clone, no versions.json) fall back
+# to resolving "latest" at build time. Reference args only as ${NAME} or
+# ${NAME:-fallback} - the Apptainer def converter textually substitutes them
+# (see dockerfile_to_def.py --build-arg).
+ARG NODE_VERSION=""
+ARG YQ_VERSION=""
+ARG GH_VERSION=""
+ARG TYPST_VERSION=""
+ARG UV_VERSION=""
+ARG BUN_VERSION=""
+ARG OPENCODE_VERSION=""
+ARG CLAUDE_CODE_VERSION=""
+ARG CODEX_VERSION=""
+ARG PI_VERSION=""
+
+# Basic setup + CLI utilities
+RUN apt-get update && apt-get install -y \
+        --no-install-recommends \
+        curl \
+        git \
+        git-lfs \
+        openssh-client \
+        ca-certificates \
+        build-essential \
+        gosu \
+        jq \
+        ripgrep \
+        python3 \
+        unzip \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) node_arch="x64" ;; \
+        arm64) node_arch="arm64" ;; \
+        *) echo "Unsupported architecture for Node.js: $arch" >&2; exit 1 ;; \
+    esac \
+    && node_version="${NODE_VERSION:-$(curl -fsSL https://nodejs.org/dist/index.json | jq -r --arg node_arch "$node_arch" 'map(select(.files | index("linux-" + $node_arch))) | .[0].version')}" \
+    && curl -fsSL "https://nodejs.org/dist/${node_version}/node-${node_version}-linux-${node_arch}.tar.xz" -o /tmp/node.tar.xz \
+    && mkdir -p /opt/node \
+    && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 \
+    && ln -sf /opt/node/bin/node /usr/local/bin/node \
+    && ln -sf /opt/node/bin/npm /usr/local/bin/npm \
+    && ln -sf /opt/node/bin/npx /usr/local/bin/npx \
+    && rm -f /tmp/node.tar.xz
+
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) yq_arch="amd64" ;; \
+        arm64) yq_arch="arm64" ;; \
+        *) echo "Unsupported architecture for yq: $arch" >&2; exit 1 ;; \
+    esac \
+    && yq_version="${YQ_VERSION:-$(curl -fsSL https://api.github.com/repos/mikefarah/yq/releases/latest | jq -r '.tag_name | ltrimstr("v")')}" \
+    && curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${yq_version}/yq_linux_${yq_arch}" -o /usr/local/bin/yq \
+    && chmod +x /usr/local/bin/yq
+
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) gh_arch="amd64" ;; \
+        arm64) gh_arch="arm64" ;; \
+        *) echo "Unsupported architecture for gh: $arch" >&2; exit 1 ;; \
+    esac \
+    && gh_version="${GH_VERSION:-$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r '.tag_name | ltrimstr("v")')}" \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_${gh_arch}.tar.gz" -o /tmp/gh.tar.gz \
+    && tar -xzf /tmp/gh.tar.gz -C /tmp \
+    && install -m 0755 "/tmp/gh_${gh_version}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh \
+    && rm -rf /tmp/gh.tar.gz "/tmp/gh_${gh_version}_linux_${gh_arch}"
+
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) typst_arch="x86_64" ;; \
+        arm64) typst_arch="aarch64" ;; \
+        *) echo "Unsupported architecture for Typst: $arch" >&2; exit 1 ;; \
+    esac \
+    && typst_version="${TYPST_VERSION:-$(curl -fsSL https://api.github.com/repos/typst/typst/releases/latest | jq -r '.tag_name | ltrimstr("v")')}" \
+    && curl -fsSL "https://github.com/typst/typst/releases/download/v${typst_version}/typst-${typst_arch}-unknown-linux-musl.tar.xz" -o /tmp/typst.tar.xz \
+    && tar -xJf /tmp/typst.tar.xz -C /tmp \
+    && install -m 0755 "/tmp/typst-${typst_arch}-unknown-linux-musl/typst" /usr/local/bin/typst \
+    && rm -rf /tmp/typst.tar.xz "/tmp/typst-${typst_arch}-unknown-linux-musl"
+
+# uv: versioned installer URL when pinned (plain installer resolves latest).
+RUN if [ -n "$UV_VERSION" ]; then \
+        uv_installer="https://astral.sh/uv/${UV_VERSION}/install.sh"; \
+    else \
+        uv_installer="https://astral.sh/uv/install.sh"; \
+    fi \
+    && curl -LsSf "$uv_installer" \
+    | env UV_UNMANAGED_INSTALL="/usr/local/bin" sh
+
+# bun: pinned release asset (fallback: latest tag from the GitHub API).
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) bun_arch="x64" ;; \
+        arm64) bun_arch="aarch64" ;; \
+        *) echo "Unsupported architecture for bun: $arch" >&2; exit 1 ;; \
+    esac \
+    && bun_version="${BUN_VERSION:-$(curl -fsSL https://api.github.com/repos/oven-sh/bun/releases/latest | jq -r '.tag_name | ltrimstr("bun-v")')}" \
+    && curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${bun_version}/bun-linux-${bun_arch}.zip" -o /tmp/bun.zip \
+    && unzip -q /tmp/bun.zip -d /tmp \
+    && install -m 0755 "/tmp/bun-linux-${bun_arch}/bun" /usr/local/bin/bun \
+    && rm -rf /tmp/bun.zip "/tmp/bun-linux-${bun_arch}"
+
+RUN npm install -g \
+        "opencode-ai@${OPENCODE_VERSION:-latest}" \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION:-latest}" \
+        "@openai/codex@${CODEX_VERSION:-latest}" \
+    && npm install -g --ignore-scripts \
+        "@earendil-works/pi-coding-agent@${PI_VERSION:-latest}" \
+    && npm cache clean --force
+
+# pi-plan-modus: read-only "plan mode" extension for pi instances.
+# Baked into the image (with its runtime dep just-bash) so every pi instance
+# gets it without a per-instance install or runtime network access. The
+# entrypoint copies the extension source into ~/.pi/agent/extensions/ and
+# links this node_modules so just-bash resolves (pi's extension discovery
+# needs real files, but node module resolution follows the symlink).
+RUN mkdir -p /opt/pi-extensions/plan-modus \
+    && npm install --prefix /opt/pi-extensions/plan-modus \
+        --omit=dev --legacy-peer-deps --ignore-scripts pi-plan-modus@0.2.6 \
+    && npm cache clean --force
+
+# agentic subagent extension + pi-notify + default agent definitions. Baked
+# into the base image (no runtime network access needed). The entrypoint copies
+# the extensions into ~/.pi/agent/extensions/ and the agents into
+# ~/.pi/agent/agents/ for auto-discovery by pi. Directory COPYs keep all these
+# small files in a single layer instead of one layer each (fewer intermediate
+# images, faster builds).
+RUN mkdir -p /opt/pi-extensions/agents
+COPY extensions/ /opt/pi-extensions/
+COPY agents/ /opt/pi-extensions/agents/
+
+ENV PATH="/opt/node/bin:/usr/local/bin:$PATH"
+
+# The CLIs above are pinned at build time and /opt/node is not writable
+# by the container's runtime user, so an in-place self-update can only
+# fail ("no write permission to npm prefix"). Upgrades come from
+# rebuilding the image.
+ENV DISABLE_AUTOUPDATER=1
+ENV OPENCODE_DISABLE_AUTOUPDATE=1
+
+# Create home directory for container
+RUN mkdir -p /home
+ENV HOME=/home
+
+WORKDIR /workspace
+
+COPY entrypoint.py /entrypoint.py
+
+ENTRYPOINT ["/entrypoint.py"]

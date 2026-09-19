@@ -1,0 +1,22 @@
+# Editor / OS
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Logs / scratch
+*.log
+.tmp/
+
+# Apptainer build artifacts (large binary, rebuild locally)
+.apptainer/
+*.sif
+*.sif.def

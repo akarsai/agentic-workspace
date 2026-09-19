@@ -1,0 +1,43 @@
+# Scratch space (agents must never write to /tmp)
+.tmp/
+*.log
+
+# Pi agent skills rendered into the workspace at launch (never committed)
+.agents/
+
+# Claude Code project-local state written during runs (never committed)
+.claude/
+
+# Clone-local instance selection written by install (never committed)
+.agentic-instances
+
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+*~
+
+# agentic instructions
+AGENTS.md
+CLAUDE.md
+/STYLE.md
+
+
+# Clone-local tool version pins refreshed by update (never committed)
+blueprint/container/versions.json
+# python / uv (regenerated in the sandbox)
+venv/
+build/
+*.lock

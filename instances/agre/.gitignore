@@ -1,0 +1,50 @@
+# Scratch space created at launch (agents must not write to /tmp)
+.tmp/
+*.log
+
+# Pi agent skills rendered into the workspace at launch
+.agents/
+
+# Container images (large binary, rebuild locally)
+*.sif
+
+# Apptainer cache
+.apptainer/
+
+# Temporary files
+*.tmp
+
+# Editor files
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# NFS stale handles
+.nfs*
+
+# Python
+__pycache__/
+*.pyc
+
+# uv lockfile (research project, reproducible via latest deps)
+uv.lock
+
+# uv setuptools egg-info build directory
+src/.build/
+
+# Generated results (large, reproducible)
+src/results/
+*.pickle
+
+# Generated workspace instruction files (copied from INSTRUCTIONS.md at launch)
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+# Hive-One docs
+HIVE-ONE-PUBLIC.md
