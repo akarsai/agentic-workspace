@@ -118,7 +118,7 @@ def write(name: str, values: dict[str, str]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         f"# {name} configuration (managed by agentic-workspace)",
-        "# Edit this file, or run: agentic-workspace setup",
+        "# Edit this file, or run: agentic-workspace settings",
         "",
     ]
     for key in sorted(values):

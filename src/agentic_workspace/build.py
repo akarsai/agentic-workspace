@@ -13,23 +13,12 @@ from pathlib import Path
 
 from . import oci
 from . import container_build
+from . import interactive
 from .manifest import load_manifest
-from .paths import instances_dir, marker_file, repo_root
+from .paths import instances_dir, repo_root
 from .util import die, run_with_apptainer_fallback, say, warn
 
 DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
-
-
-def read_default_instances() -> list[str]:
-    marker = marker_file()
-    if not marker.is_file():
-        return []
-    names = []
-    for line in marker.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            names.append(line)
-    return names
 
 
 def ensure_runtime(runtime: str) -> int:
@@ -110,11 +99,12 @@ def main(argv: list[str], agent_root: Path | None = None) -> int:
         if agent_root is not None:
             names = [load_manifest(agent_root / "manifest.yaml").name]
         else:
-            names = read_default_instances()
+            names = interactive.read_marker()
             if not names:
-                warn("no .agentic-instances marker found — run './agentic-workspace install' first")
-                warn("(it writes each agent's config, launcher, and the marker), then re-run build;")
-                warn("or name instances explicitly, e.g. ./agentic-workspace build agre")
+                # Bare build with no install selection: ask.
+                names = interactive.pick_instances("Build")
+            if not names:
+                warn("nothing selected: nothing to build")
                 print()
                 say("Build complete.")
                 return 0

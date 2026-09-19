@@ -53,5 +53,12 @@ def resolve_agent_root() -> Path | None:
 
 
 def marker_file() -> Path:
-    """Clone-local list of the instances selected by `install` (gitignored)."""
+    """Clone-local list of the instances selected by `install` (gitignored).
+
+    AGENTIC_INSTANCES_MARKER overrides the location (used by tests so they
+    never depend on, or touch, a real clone's selection).
+    """
+    env = os.environ.get("AGENTIC_INSTANCES_MARKER")
+    if env:
+        return Path(env)
     return repo_root() / ".agentic-instances"

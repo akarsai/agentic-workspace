@@ -8,13 +8,48 @@ from pathlib import Path
 from . import config as cfgmod
 from .manifest import load_manifest
 from .paths import resolve_agent_root
-from .util import die, say
+from .util import die, say, warn
+
+
+def _show_help() -> None:
+    print(
+        "Usage:\n"
+        "  agentic-workspace clean [NAME] [OPTIONS]\n"
+        "  <name> --clean [OPTIONS]\n"
+        "\n"
+        "Options:\n"
+        "  --yes             Skip confirmation prompt\n"
+        "  --include-config  Also remove the instance config file\n"
+        "  --include-image   Also remove the container image from Docker\n"
+        "  --all             Equivalent to --include-config --include-image\n"
+        "  --help            Show this help\n"
+        "\n"
+        "Default behavior:\n"
+        "  Removes only launcher-managed local state under the configured state root.\n"
+        "  Does not remove project files.\n"
+        "  Does not remove container images unless explicitly requested."
+    )
 
 
 def main(argv: list[str], agent_root: Path | None = None) -> int:
+    from . import interactive
+
+    if any(a in ("--help", "-h") for a in argv):
+        _show_help()
+        return 0
+
     agent_root = agent_root or resolve_agent_root()
     if agent_root is None:
-        return die("cannot locate manifest.yaml (set AGENT_ROOT or run from an instance directory).")
+        # Bare CLI: clean [NAME]. Without a name, ask.
+        name, argv = interactive.extract_instance_arg(argv)
+        if name is None:
+            name = interactive.pick_instance("Clean")
+            if name is None:
+                warn("No instance selected.")
+                return 0
+        if not interactive.is_instance(name):
+            return die(f"instance '{name}' not found under instances/")
+        agent_root = interactive.instance_root(name)
     manifest = load_manifest(agent_root / "manifest.yaml")
     name = manifest.name
     image = manifest.image
@@ -32,24 +67,6 @@ def main(argv: list[str], agent_root: Path | None = None) -> int:
         elif a == "--all":
             remove_config = True
             remove_image = True
-        elif a in ("--help", "-h"):
-            print(
-                f"Usage:\n"
-                f"  {name} --clean [OPTIONS]\n"
-                f"\n"
-                f"Options:\n"
-                f"  --yes             Skip confirmation prompt\n"
-                f"  --include-config  Also remove {cfgmod.config_path(name)}\n"
-                f"  --include-image   Also remove {image} from Docker if available\n"
-                f"  --all             Equivalent to --include-config --include-image\n"
-                f"  --help            Show this help\n"
-                f"\n"
-                f"Default behavior:\n"
-                f"  Removes only launcher-managed local state under the configured state root.\n"
-                f"  Does not remove project files.\n"
-                f"  Does not remove container images unless explicitly requested."
-            )
-            return 0
         else:
             return die(f"unknown option: {a}")
 

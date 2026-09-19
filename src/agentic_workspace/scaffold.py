@@ -23,8 +23,9 @@ VALID_TOOLS = ("opencode", "pi", "claude", "codex")
 
 def show_help() -> None:
     print(
-        "Usage: agentic-workspace scaffold <name> [OPTIONS]\n"
+        "Usage: agentic-workspace scaffold [name] [OPTIONS]\n"
         "       agentic-workspace scaffold --list\n"
+        "       (run bare, the scaffold asks for name, template, and tool)\n"
         "\n"
         "Options:\n"
         "  --template NAME   research | web | minimal   (default: minimal)\n"
@@ -47,6 +48,31 @@ def cmd_list() -> int:
             desc = load_manifest(manifest).description
         print(f"  {t.name:<10} {desc}")
     return 0
+
+
+def ask_template(default: str) -> str:
+    """Interactive template menu. Enter keeps the default. EOF-safe."""
+    templates = sorted(t.name for t in TEMPLATE_DIR.iterdir() if t.is_dir())
+    if not templates:
+        return default
+    print("Template:")
+    for i, tname in enumerate(templates, 1):
+        mark = "*" if tname == default else " "
+        desc = ""
+        mfile = TEMPLATE_DIR / tname / "manifest.yaml"
+        if mfile.is_file():
+            desc = load_manifest(mfile).description
+        print(f" {i:>2}){mark} {tname:<10} {desc}")
+    while True:
+        try:
+            raw = input(f"Number [1-{len(templates)}, Enter = {default}]: ").strip()
+        except EOFError:
+            return default
+        if raw == "":
+            return default
+        if raw.isdigit() and 1 <= int(raw) <= len(templates):
+            return templates[int(raw) - 1]
+        print(f"Enter a number between 1 and {len(templates)}.")
 
 
 def launcher_shim(name: str) -> str:
@@ -84,6 +110,8 @@ def main(argv: list[str]) -> int:
     tool = "pi"
     description = ""
     no_git = False
+    template_given = False
+    tool_given = False
 
     args = list(argv)
     if args and args[0] in ("--help", "-h"):
@@ -99,6 +127,7 @@ def main(argv: list[str]) -> int:
             if i + 1 >= len(args):
                 return die("--template requires a value")
             template = args[i + 1]
+            template_given = True
             i += 1
         elif a == "--dir":
             if i + 1 >= len(args):
@@ -109,6 +138,7 @@ def main(argv: list[str]) -> int:
             if i + 1 >= len(args):
                 return die("--tool requires a value")
             tool = args[i + 1]
+            tool_given = True
             i += 1
         elif a == "--description":
             if i + 1 >= len(args):
@@ -129,12 +159,28 @@ def main(argv: list[str]) -> int:
                 return die(f"unexpected argument: {a}")
         i += 1
 
+    # Bare scaffold: ask for name, template, and tool (Enter keeps defaults).
+    interactive_mode = not name
+    if not name:
+        try:
+            name = input("Instance name (lowercase letters, digits, - or _): ").strip()
+        except EOFError:
+            name = ""
     if not name:
         die("missing instance name")
         show_help()
         return 1
     if not VALID_NAME.match(name):
         return die(f"invalid name '{name}' (use lowercase letters, digits, - or _)")
+
+    if interactive_mode and not template_given:
+        template = ask_template(template)
+    if interactive_mode and not tool_given:
+        from .setup_wizard import ask_tool
+
+        print()
+        tool = ask_tool(tool)
+
     if not (TEMPLATE_DIR / template).is_dir():
         return die(f"unknown template '{template}'")
     if tool not in VALID_TOOLS:

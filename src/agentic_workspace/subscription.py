@@ -5,7 +5,7 @@ plan). Setting
 
     AGENTIC_MODEL_SUBSCRIPTION = "<provider>:<model>"    # e.g. zai:glm-5.3
 
-in the instance config (or via `<name> --setup`) makes that model the
+in the instance config (or via `<name> --settings`) makes that model the
 default for everything:
 
 - the main session (it fills AGENTIC_DEFAULT_MODEL unless explicitly set),

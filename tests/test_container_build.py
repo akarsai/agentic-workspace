@@ -146,7 +146,7 @@ def test_build_subcommand_passes_force_to_base(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(
         build_mod, "run_with_apptainer_fallback", lambda cmd: calls.append(cmd) or 0
     )
-    monkeypatch.setattr(build_mod, "read_default_instances", lambda: ["agre"])
+    monkeypatch.setattr(build_mod.interactive, "read_marker", lambda: ["agre"])
 
     assert build_mod.main(["--apptainer"]) == 0
     assert calls, "expected a base build subprocess"
@@ -170,7 +170,7 @@ def test_update_subcommand_passes_force_to_base(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(
         update_mod, "run_with_apptainer_fallback", lambda cmd: calls.append(cmd) or 0
     )
-    monkeypatch.setattr(update_mod, "read_default_instances", lambda: ["agre"])
+    monkeypatch.setattr(update_mod.interactive, "read_marker", lambda: ["agre"])
 
     assert update_mod.main(["--apptainer"]) == 0
     base_calls = [c for c in calls if "base" in c]
@@ -275,7 +275,7 @@ def test_update_refreshes_tool_pins_and_exports_pull(
     monkeypatch.setattr(
         update_mod, "run_with_apptainer_fallback", lambda cmd: calls.append(cmd) or 0
     )
-    monkeypatch.setattr(update_mod, "read_default_instances", lambda: ["agre"])
+    monkeypatch.setattr(update_mod.interactive, "read_marker", lambda: ["agre"])
     monkeypatch.delenv("AGENTIC_DOCKER_PULL", raising=False)
 
     refreshed: list[bool] = []
@@ -297,7 +297,7 @@ def test_update_no_tools_skips_refresh(tmp_path: Path, monkeypatch: pytest.Monke
     (tmp_path / "bin" / "agre").write_text("#!/bin/sh\n")
     monkeypatch.setattr(update_mod, "subprocess", SimpleNamespace(run=lambda *a, **k: None, call=lambda *a, **k: 0))
     monkeypatch.setattr(update_mod, "run_with_apptainer_fallback", lambda cmd: 0)
-    monkeypatch.setattr(update_mod, "read_default_instances", lambda: ["agre"])
+    monkeypatch.setattr(update_mod.interactive, "read_marker", lambda: ["agre"])
 
     def boom() -> None:
         raise AssertionError("--no-tools must skip the refresh")

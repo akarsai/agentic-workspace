@@ -1,14 +1,14 @@
 """agentic-workspace CLI: one command, many subcommands.
 
 Usage:
-  agentic-workspace launch [OPTS] [DIR]    # run an agent in a sandboxed container
-  agentic-workspace install [OPTS]         # one-time interactive installer
-  agentic-workspace build [OPTS]           # build base + instance images
-  agentic-workspace update [OPTS]          # pull + rebuild
-  agentic-workspace scaffold NAME [OPTS]   # create a new instance
-  agentic-workspace setup [KEY=VALUE...]   # per-instance setup wizard
-  agentic-workspace clean [OPTS]           # remove launcher-managed local state
-  agentic-workspace uninstall [OPTS]       # remove an installed instance
+  agentic-workspace launch [OPTS] [DIR]     # run an agent in a sandboxed container
+  agentic-workspace install [OPTS]          # interactive installer
+  agentic-workspace build [OPTS] [NAME...]  # build base + instance images (asks when bare)
+  agentic-workspace update [OPTS]           # pull + rebuild (asks when bare)
+  agentic-workspace scaffold [NAME] [OPTS]  # create a new instance (asks when bare)
+  agentic-workspace settings [NAME] [K=V..] # per-instance settings (interactive)
+  agentic-workspace clean [NAME] [OPTS]     # remove launcher-managed local state (asks)
+  agentic-workspace uninstall [NAME] [OPTS] # remove an installed instance (asks)
 """
 from __future__ import annotations
 
@@ -23,10 +23,13 @@ SUBCOMMANDS = {
     "build": build.main,
     "update": update.main,
     "scaffold": scaffold.main,
-    "setup": setup_wizard.main,
+    "settings": setup_wizard.main,
     "clean": cleanup.main,
     "uninstall": uninstall.main,
 }
+
+# Old name kept working so existing muscle memory and scripts do not break.
+SUBCOMMANDS["setup"] = setup_wizard.main
 
 
 def show_help() -> None:
@@ -38,13 +41,13 @@ def show_help() -> None:
         "\n"
         "Subcommands:\n"
         "  launch      Run an AI coding agent in a sandboxed container\n"
-        "  install     One-time interactive installer (launchers + configs + builds)\n"
-        "  build       Build the base image and instance images\n"
+        "  install     Interactive installer (launchers + configs + builds)\n"
+        "  build       Build the base image and instance images (asks which when bare)\n"
         "  update      Pull the repo, refresh tool pins, rebuild images\n"
-        "  scaffold    Create a new child instance from a template\n"
-        "  setup       Per-instance setup wizard (config.py)\n"
-        "  clean       Remove launcher-managed local state\n"
-        "  uninstall   Remove an installed instance\n"
+        "  scaffold    Create a new child instance from a template (asks when bare)\n"
+        "  settings    Per-instance settings menu (interactive)\n"
+        "  clean       Remove launcher-managed local state (asks which when bare)\n"
+        "  uninstall   Remove an installed instance (asks which when bare)\n"
         "\n"
         "Run 'agentic-workspace <subcommand> --help' for details.\n"
         "\n"

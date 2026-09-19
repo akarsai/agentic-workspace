@@ -14,20 +14,35 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENT_ROOT = REPO_ROOT / "instances" / "agre"
 
 
-def run_cli(args: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
+def run_cli(args: list[str], env: dict | None = None, input: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "agentic_workspace.cli", *args],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
         text=True,
+        input=input,
     )
+
+
+def sandbox_env(tmp_path: Path) -> dict:
+    """Isolated HOME/XDG (and marker) so interactive tests touch nothing real."""
+    env = dict(os.environ)
+    env.update(
+        {
+            "HOME": str(tmp_path),
+            "XDG_CONFIG_HOME": str(tmp_path / ".config"),
+            "AGENTIC_INSTANCES_MARKER": str(tmp_path / "no-marker"),
+            "NO_COLOR": "1",
+        }
+    )
+    return env
 
 
 def test_help_lists_all_subcommands() -> None:
     result = run_cli(["--help"])
     assert result.returncode == 0
-    for sub in ("launch", "install", "build", "update", "scaffold", "setup", "clean", "uninstall"):
+    for sub in ("launch", "install", "build", "update", "scaffold", "settings", "clean", "uninstall"):
         assert sub in result.stdout
 
 
@@ -446,3 +461,110 @@ def test_dockerfile_to_def_rejects_malformed_build_arg(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "KEY=VALUE" in result.stderr
+
+
+# --- interactive subcommands -------------------------------------------
+
+
+def test_extract_instance_arg_splits_positional() -> None:
+    from agentic_workspace.interactive import extract_instance_arg
+
+    name, rest = extract_instance_arg(["--yes", "agre", "--keep-state"])
+    assert name == "agre"
+    assert rest == ["--yes", "--keep-state"]
+
+
+def test_extract_instance_arg_keeps_option_values() -> None:
+    from agentic_workspace.interactive import extract_instance_arg
+
+    name, rest = extract_instance_arg(
+        ["--install-dir", "/tmp/x", "--yes"], value_opts={"--install-dir", "--bin-dir"}
+    )
+    assert name is None
+    assert rest == ["--install-dir", "/tmp/x", "--yes"]
+
+
+def test_read_marker_env_override(tmp_path: Path, monkeypatch) -> None:
+    from agentic_workspace import interactive
+
+    marker = tmp_path / "marker"
+    marker.write_text("# comment\nagre\nlera\n")
+    monkeypatch.setenv("AGENTIC_INSTANCES_MARKER", str(marker))
+    assert interactive.read_marker() == ["agre", "lera"]
+
+
+def test_settings_bare_picks_instance_then_wizard(tmp_path: Path) -> None:
+    """`settings` with no arguments asks which instance, then (no config yet)
+    runs the full wizard. Piped EOF answers every wizard question with the
+    default, so a config gets written."""
+    env = sandbox_env(tmp_path)
+    result = run_cli(["settings"], env=env, input="1\n")
+    assert result.returncode == 0, result.stderr
+    assert "pick an instance" in result.stdout
+    config = tmp_path / ".config" / "agre" / "config.py"
+    assert config.is_file()
+
+
+def test_setup_alias_still_works(tmp_path: Path) -> None:
+    env = sandbox_env(tmp_path)
+    result = run_cli(["setup"], env=env, input="1\n")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / ".config" / "agre" / "config.py").is_file()
+
+
+def test_settings_menu_edits_single_value(tmp_path: Path) -> None:
+    env = sandbox_env(tmp_path)
+    # First run: wizard with EOF defaults creates the config.
+    assert run_cli(["settings"], env=env, input="1\n").returncode == 0
+    config = tmp_path / ".config" / "agre" / "config.py"
+    # Second run: pick instance 1, then menu: change item 3, save and exit.
+    result = run_cli(["settings"], env=env, input="1\n3\nhttp://proxy:3128\nq\n")
+    assert result.returncode == 0, result.stderr
+    assert "Settings:" in result.stdout
+    assert "http://proxy:3128" in config.read_text()
+
+
+def test_settings_keyvalue_with_explicit_name(tmp_path: Path) -> None:
+    env = sandbox_env(tmp_path)
+    assert run_cli(["settings"], env=env, input="1\n").returncode == 0
+    result = run_cli(["settings", "agre", "AGENTIC_HTTP_PROXY=http://p:1"], env=env)
+    assert result.returncode == 0, result.stderr
+    assert "AGENTIC_HTTP_PROXY" in (tmp_path / ".config" / "agre" / "config.py").read_text()
+
+
+def test_clean_bare_picks_instance_and_confirms(tmp_path: Path) -> None:
+    env = sandbox_env(tmp_path)
+    result = run_cli(["clean"], env=env, input="1\n")
+    assert result.returncode == 0, result.stderr
+    assert "pick an instance" in result.stdout
+    assert "Aborted." in result.stdout  # EOF at Continue? [y/N] means no
+
+
+def test_clean_named_instance_skips_menu(tmp_path: Path) -> None:
+    env = sandbox_env(tmp_path)
+    result = run_cli(["clean", "agre", "--yes"], env=env)
+    assert result.returncode == 0, result.stderr
+    assert "Cleanup complete." in result.stdout
+
+
+def test_uninstall_bare_picks_instance_and_confirms(tmp_path: Path) -> None:
+    env = sandbox_env(tmp_path)
+    result = run_cli(["uninstall"], env=env, input="1\n")
+    assert result.returncode == 0, result.stderr
+    assert "pick an instance" in result.stdout
+    assert "Aborted." in result.stdout
+
+
+def test_scaffold_interactive_bare(tmp_path: Path) -> None:
+    """Bare scaffold asks for name, template (Enter = minimal), tool (Enter = pi)."""
+    env = sandbox_env(tmp_path)
+    result = run_cli(
+        ["scaffold", "--dir", str(tmp_path / "out"), "--no-git"],
+        env=env,
+        input="testagent\n\n\n",
+    )
+    assert result.returncode == 0, result.stderr
+    child = tmp_path / "out" / "testagent"
+    assert (child / "manifest.yaml").is_file()
+    assert (child / "testagent").is_file()
+    assert "minimal" in result.stdout

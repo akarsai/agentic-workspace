@@ -70,7 +70,7 @@ agre --apptainer ~/my-project
 
 ## Configuration
 
-Run `agre --setup` to create (or update) the config file at
+Run `agre --settings` to create (or update) the config file at
 `${XDG_CONFIG_HOME:-$HOME/.config}/agre/config.py` (a Python module. Legacy
 `config.sh` files are migrated automatically). The wizard configures:
 
@@ -79,7 +79,7 @@ Run `agre --setup` to create (or update) the config file at
 - **Network proxy**. HTTP/HTTPS proxy for inside the container
 - **Extra bind directories**: additional host paths mounted into the sandbox (they appear under `/workspace/.mount/<name>`)
 
-Re-run `agre --setup` any time, or set individual values with `agre --setup KEY=VALUE`.
+Re-run `agre --settings` any time, or set individual values with `agre --settings KEY=VALUE`.
 
 `WANDB_API_KEY` and `HF_TOKEN` are also forwarded automatically when they are
 exported in the host environment, so wandb/Hugging Face work inside the sandbox

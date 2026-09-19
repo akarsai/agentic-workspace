@@ -21,23 +21,12 @@ from pathlib import Path
 
 from . import config as cfgmod
 from . import container_build
+from . import interactive
 from . import tool_versions
-from .paths import instances_dir, marker_file, repo_root
+from .paths import instances_dir, repo_root
 from .util import die, run_with_apptainer_fallback, say, warn
 
 DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
-
-
-def read_default_instances() -> list[str]:
-    marker = marker_file()
-    if not marker.is_file():
-        return []
-    names = []
-    for line in marker.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            names.append(line)
-    return names
 
 
 def sync_runtime_in_config(name: str, runtime: str) -> None:
@@ -79,8 +68,8 @@ def refresh_tool_pins() -> None:
     """Resolve latest upstream versions into versions.json and report.
 
     Failed lookups keep the previous pin (warned per tool) instead of
-    failing the update; the affected tool then rebuilds at its pinned — or,
-    if never pinned, build-time 'latest' — version.
+    failing the update. The affected tool then rebuilds at its pinned (or,
+    if never pinned, build-time 'latest') version.
     """
     say(f"Refreshing tool versions ({tool_versions.versions_file().relative_to(repo_root())})")
     result = tool_versions.refresh_versions()
@@ -149,14 +138,18 @@ def main(argv: list[str]) -> int:
 
     bin_dir = Path(os.environ.get("BIN_DIR", str(DEFAULT_BIN_DIR)))
 
-    if only is None and not read_default_instances():
-        warn("no .agentic-instances marker found (run ./agentic-workspace install to pick instances);")
-        warn("nothing to update — name an instance explicitly, e.g. ./agentic-workspace update --name agre")
-        print()
-        print("Update complete.")
-        return 0
-
-    names = [only] if only is not None else read_default_instances()
+    # Which instances: --name, the install selection, or an interactive pick.
+    if only is not None:
+        names = [only]
+    else:
+        names = interactive.read_marker()
+        if not names:
+            names = interactive.pick_instances("Update")
+        if not names:
+            warn("nothing selected: nothing to update")
+            print()
+            print("Update complete.")
+            return 0
 
     print(f"Updating agentic-workspace ({repo_root()})")
     try:

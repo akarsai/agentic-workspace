@@ -2,7 +2,7 @@
 # Managed by: agentic-workspace install / setup
 #
 # Location: ${XDG_CONFIG_HOME:-$HOME/.config}/<name>/config.py
-# Edit individual settings:  <name> --setup KEY=VALUE
+# Edit individual settings:  <name> --settings KEY=VALUE
 
 # Container runtime: docker (or apptainer, for Linux HPC builds without Docker)
 AGENTIC_CONTAINER_RUNTIME = "docker"

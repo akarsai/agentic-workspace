@@ -130,7 +130,7 @@ def parse_args(argv: list[str]) -> tuple[Options, Dispatch | None]:
     n = len(argv)
     while i < n:
         a = argv[i]
-        if a == "--setup":
+        if a in ("--settings", "--setup"):
             return opts, Dispatch("setup", argv[i + 1 :])
         if a == "--build":
             return opts, Dispatch("build")
@@ -204,7 +204,7 @@ def show_help() -> None:
         """Usage: <instance> [OPTIONS] [DIRECTORY] [TOOL_OPTIONS...]
 
 Options:
-  --setup             Run the optional interactive setup wizard
+  --settings         Run the interactive settings menu (--setup also works)
   --yolo              Enable all read/write tools (skip permission prompts) for the selected tool
   --build             Build or rebuild the container image
   --apptainer         Use Apptainer runtime (build + launch on Linux HPC without Docker)
@@ -230,7 +230,7 @@ Examples:
   <instance> --apptainer --build          # Build with Apptainer (no Docker needed)
   <instance> --apptainer                  # Launch with Apptainer
   <instance> --apptainer --multi-node     # Multi-node dispatch (Slurm, inside an allocation)
-  <instance> --setup                      # Optional setup wizard
+  <instance> --settings                    # Interactive settings menu
   <instance> --test                       # Validate environment
   <instance>                              # Current directory
   <instance> ~/my-project                 # Specific directory
@@ -1351,8 +1351,8 @@ def main(argv: list[str]) -> int:
     manifest = load_manifest(agent_root / "manifest.yaml")
     name = manifest.name
 
-    # Dispatch flags: --setup/--build/--clean/--uninstall re-dispatch to the
-    # matching subcommand (preserving the old launcher's UX).
+    # Dispatch flags: --settings/--build/--clean/--uninstall re-dispatch to
+    # the matching subcommand (preserving the old launcher's UX).
     if dispatch is not None:
         if dispatch.action == "setup":
             return wizard_mod.main(dispatch.args, agent_root=agent_root)
