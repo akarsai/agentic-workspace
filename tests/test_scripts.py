@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SUBMIT = REPO_ROOT / "instances" / "agre" / "scripts" / "submit.sh"
+SUBMIT = REPO_ROOT / "instances" / "agre" / "container" / "slurm-scripts" / "submit.sh"
 
 
 def install_fake_sbatch(tmp_path: Path) -> tuple[Path, Path]:
@@ -93,7 +93,7 @@ def test_sbatch_templates_find_prologue_from_spool_copy(tmp_path: Path) -> None:
     dir -- the old templates sourced a nonexistent file there, the prologue
     never ran, and every job died on the unrepaired environment. The
     templates must resolve job-header.sh via AGENTIC_WORKSPACE_HOST instead."""
-    scripts = REPO_ROOT / "instances" / "agre" / "scripts"
+    scripts = REPO_ROOT / "instances" / "agre" / "container" / "slurm-scripts"
     ws = tmp_path / "hostws"                      # node-visible workspace
     (ws / "scripts").mkdir(parents=True)
     (ws / "scripts" / "job-header.sh").write_text(
@@ -127,7 +127,7 @@ def test_smoke_sbatch_does_not_report_success_after_failure(tmp_path: Path) -> N
     """set -euo pipefail precedes the prologue source: a failing prologue
     aborts the script. Regression: the smoke job once printed SMOKE OK even
     though the prologue and the python check had both failed."""
-    scripts = REPO_ROOT / "instances" / "agre" / "scripts"
+    scripts = REPO_ROOT / "instances" / "agre" / "container" / "slurm-scripts"
     ws = tmp_path / "hostws"
     (ws / "scripts").mkdir(parents=True)
     (ws / "scripts" / "job-header.sh").write_text("echo prologue failed >&2\nexit 1\n")

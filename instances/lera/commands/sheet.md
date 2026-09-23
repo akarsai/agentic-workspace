@@ -5,7 +5,7 @@ argument-hint: "[n] [topic or free-form instructions, e.g. '3: focus on diagonal
 
 You are producing an **exercise sheet** for the course. The sheet must
 follow the book, respect the syllabus, read as if the instructor wrote it,
-and contain only exercises you have solved yourself (Commandments III--V).
+and contain only exercises you have solved yourself.
 
 Arguments: $ARGUMENTS
 
@@ -18,7 +18,7 @@ Arguments: $ARGUMENTS
 3. Topics: from the topic plan in `COURSE.md` for week $n$'s units.
    Free-form arguments may
    narrow or extend the topic -- but anything beyond the week's coverage is
-   bonus material and must be marked as such (Commandment IV).
+   bonus material and must be marked as such.
 4. Style: load `STYLE.md`. **If it does not exist**, ask for sample sheets
    and run `/style` first. Do not write in your own default voice.
 5. Template: reuse `template.typ`. If missing but sample sheets
@@ -37,7 +37,7 @@ problems before typesetting):
 - exercise list: one line each -- task type (compute / prove / apply /
   model / true-false-with-justification), the exact content, the book
   section it drills, the notation it uses.
-- difficulty mix vs. the course profile's targets (Commandment VI).
+- difficulty mix vs. the course profile's targets (and stated honestly).
 - points allocation against the sheet's total.
 - hints (per the conventions policy) and planned bonus problems.
 - what each exercise *verifies* about the week's definitions/theorems.
@@ -51,8 +51,8 @@ notation from the topic plan in `COURSE.md`, weeks $\le n$.
 - Build on the course template. The default font is Helvetica from
   `assets/fonts/` -- compile with
   `typst compile --font-path assets/fonts <file>` early and often.
-- Notation and terminology follow the book (Commandment II for any
-  references: verified section/theorem numbers only, else generic phrasing).
+- Notation and terminology follow the book (references: verified
+  section/theorem numbers only, else generic phrasing).
 - Phrasing follows the style profile: typical openers ("Show that...",
   "Compute...", "Let ... Prove..."), points placement, sub-item style,
   hint formatting, German/English forms -- these are measured facts from
@@ -71,12 +71,11 @@ For **every** exercise, write the complete solution now, into
   (sympy/numpy via `uv run`) that checks each computational claim, including
   edge cases. Record pass/fail.
 - if you cannot solve an exercise, it is not ready: rewrite it, lower the
-  difficulty, or drop it -- and note the change in your report
-  (Commandment III).
+  difficulty, or drop it -- and note the change in your report.
 
 ## Step 4: Verify
 
-In order (Commandments VII, X) -- fix, never footnote:
+In order -- fix, never footnote:
 
 1. `typst compile --font-path assets/fonts sheets/sheet-<NN>.typ` -- zero
    errors and NO `unknown font family` warning (Helvetica resolved).
@@ -87,9 +86,8 @@ In order (Commandments VII, X) -- fix, never footnote:
 4. `uv run python scripts/verify_sheet_<NN>.py` -- all checks pass
 5. Difficulty honesty: re-read the mix against the profile targets
 
-Legacy LaTeX course: `TERM=dumb chktex` (both files) +
-`python3 .agents/skills/style/stylelint.py check <file>` replace steps 1--2
-(LaTeX is never compiled).
+Legacy LaTeX course: skip the compile steps (LaTeX is never compiled);
+steps 3--5 still apply.
 
 ## Step 5: Style pass
 

@@ -82,10 +82,13 @@ def test_lera_instance_integrity() -> None:
     # Child image builds on the shared base image.
     assert (root / "container" / "Dockerfile").read_text().lstrip().startswith("#")
     assert "FROM agentic-blueprint:base" in (root / "container" / "Dockerfile").read_text()
-    # The instruction file keeps the Project Instructions section that
-    # /update_base extracts and the launch-time instruction sync compares.
+    # The instruction file keeps its lean structure: the Typst-first
+    # personality (compilable materials, Helvetica from assets/fonts) and
+    # the honesty rules are what /update_base and the launch-time sync
+    # preserve.
     instructions = (root / "INSTRUCTIONS.md").read_text()
-    assert "## 8. Project Instructions" in instructions
+    assert "Project Instructions" not in instructions
+    assert "## 3. Honesty" in instructions
     # Typst-first personality: compilable materials, Helvetica from assets/fonts.
     assert "typst compile --font-path assets/fonts" in instructions
     assert 'Helvetica' in instructions and 'assets/fonts' in instructions

@@ -190,4 +190,4 @@ The full model and its limits are in [SECURITY.md](SECURITY.md).
 - **`update` says `docker not found` although the instances use Apptainer**: fixed — a plain `update` now takes the runtime from the instances' config (or pass `--apptainer`, `--runtime apptainer` or `--tool apptainer` explicitly).
 - **`build` says nothing to build**: no instance selection exists yet, run `./agentic-workspace install` once, or name an instance explicitly.
 - **Tools in the image feel stale**: a plain rebuild never moves a tool, run `./agentic-workspace update` (refreshes version pins and rebuilds).
-- **Jobs referencing `/workspace` fail on compute nodes**: the path only exists inside the container, use the shipped `scripts/submit.sh` on Slurm clusters.
+- **Jobs referencing `/workspace` fail on compute nodes**: the path only exists inside the container. In agre, copy the job tooling in first (`cp -r /opt/agre/slurm-scripts scripts`), then submit via `scripts/submit.sh`.

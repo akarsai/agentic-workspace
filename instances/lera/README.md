@@ -79,7 +79,7 @@ Prerequisites: Docker (or Apptainer) and an API key for your model provider
 |------|-------|
 | Book to follow, topic plan, progress | `COURSE.md` |
 | Your writing style | `STYLE.md` |
-| Sheet conventions (points, hints, solutions) | course profile, or `## 8. Project Instructions` in `AGENTS.md` |
+| Sheet conventions (points, hints, solutions) | course profile (`COURSE.md`) |
 | Preamble / macros reused in sheets | `template.typ` (Typst. Fonts in `assets/fonts/`) |
 
 Edit any of these directly: lera treats your edits as authoritative and

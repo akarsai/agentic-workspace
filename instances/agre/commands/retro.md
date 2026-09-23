@@ -16,7 +16,7 @@ Read the following files (skip any that don't exist):
 
 1. `/workspace/REVISION.md` -- previous retrospective entries (if any)
 2. `/workspace/agent-report.tex` -- experiment log, results, analysis quality
-3. `/workspace/$INSTRUCTION_FILE` -- the instructions governing this session (especially Section 8: Project Instructions)
+3. `/workspace/$INSTRUCTION_FILE` -- the instructions governing this session
 4. Run `git log --oneline -30` -- see the commit history (style, frequency, quality)
 5. Run `git diff --stat HEAD~5..HEAD 2>/dev/null || true` -- recent change patterns
 

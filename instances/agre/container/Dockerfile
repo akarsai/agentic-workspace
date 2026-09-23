@@ -4,10 +4,10 @@
 
 FROM agentic-blueprint:base
 
-# LaTeX syntax checking (research reports use chktex; never compile LaTeX).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        chktex \
-    && rm -rf /var/lib/apt/lists/*
+# Slurm job tooling (job-header.sh, submit.sh, ...). Baked into the image and
+# copied into a workspace by the agent only when the user asks for Slurm jobs
+# -- it is NOT auto-synced into every workspace.
+COPY slurm-scripts/ /opt/agre/slurm-scripts/
 
 # just (command runner) via uv. Dirs are pinned under /opt: the launcher bind
 # mounts the host over /home (image-baked files there would be shadowed) and

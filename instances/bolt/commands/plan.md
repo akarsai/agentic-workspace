@@ -9,7 +9,7 @@ otherwise ask what the task is.
 
 ## Steps
 
-1. **Understand**: read the Project Instructions, `package.json` scripts, and
+1. **Understand**: read the task, `package.json` scripts, and
    the relevant code. Identify the files the change will touch.
 2. **Restate** the task in one or two sentences and confirm with the user if
    the scope is ambiguous.
@@ -23,7 +23,7 @@ otherwise ask what the task is.
 6. **Risks**: what could go wrong, and how you will de-risk (spike, test
    early, ask the user).
 7. **Show** the plan to the user and ask for confirmation before implementing,
-   unless the Project Instructions already authorize autonomous work.
+   unless the user already authorized autonomous work.
 
 ## Format
 

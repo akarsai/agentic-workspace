@@ -34,8 +34,7 @@ defaults where you can):
    - a pasted TOC or a chapter list.
    - author + title → look the TOC up on the web (publisher page, author's
      page, Google Books preview) and **verify chapter and section titles
-     verbatim** before trusting them. Never reconstruct a TOC from memory
-     (Commandment II).
+     verbatim** before trusting them. Never reconstruct a TOC from memory.
 3. **Term shape**: number of teaching weeks, sheets per week, lecture
    rhythm (so the plan can leave room for review and exam weeks).
 4. **Conventions**: materials format (Typst by default, compiled to PDF
@@ -52,7 +51,7 @@ defaults where you can):
 
 ## Step 3: Distill the main topics from the book
 
-Work from the **verified TOC only** (Commandment II):
+Work from the **verified TOC only**:
 
 1. **Group** the book's sections into teachable units (a unit = one sheet's
    worth of material, typically 1--3 book sections).
@@ -111,10 +110,9 @@ Work from the **verified TOC only** (Commandment II):
 ## Rules
 
 - Never invent chapter numbers, section titles, or theorem names
-  (Commandment II). Unverified → generic reference + TODO entry.
+  Unverified → generic reference + TODO entry.
 - The profile is the source of truth: after any change, the topic plan,
   the cumulative notation list, and the progress table must agree -- and
-  the progress table must match the actual files in `sheets/`
-  (Commandment VIII).
+  the progress table must match the actual files in `sheets/`.
 - Keep the cumulative notation list up to date -- `/sheet` relies on it to
-  respect the syllabus (Commandment IV).
+  respect the syllabus.
