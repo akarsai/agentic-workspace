@@ -275,6 +275,7 @@ def test_update_refreshes_tool_pins_and_exports_pull(
     monkeypatch.setattr(
         update_mod, "run_with_apptainer_fallback", lambda cmd: calls.append(cmd) or 0
     )
+    monkeypatch.setattr(update_mod.container_build, "build_base_image", lambda rt, **k: 0)
     monkeypatch.setattr(update_mod.interactive, "read_marker", lambda: ["agre"])
     monkeypatch.delenv("AGENTIC_DOCKER_PULL", raising=False)
 
@@ -297,6 +298,7 @@ def test_update_no_tools_skips_refresh(tmp_path: Path, monkeypatch: pytest.Monke
     (tmp_path / "bin" / "agre").write_text("#!/bin/sh\n")
     monkeypatch.setattr(update_mod, "subprocess", SimpleNamespace(run=lambda *a, **k: None, call=lambda *a, **k: 0))
     monkeypatch.setattr(update_mod, "run_with_apptainer_fallback", lambda cmd: 0)
+    monkeypatch.setattr(update_mod.container_build, "build_base_image", lambda rt, **k: 0)
     monkeypatch.setattr(update_mod.interactive, "read_marker", lambda: ["agre"])
 
     def boom() -> None:
@@ -304,3 +306,171 @@ def test_update_no_tools_skips_refresh(tmp_path: Path, monkeypatch: pytest.Monke
 
     monkeypatch.setattr(update_mod, "refresh_tool_pins", boom)
     assert update_mod.main(["--docker", "--no-tools"]) == 0
+
+
+def install_privilege_failing_apptainer(tmp_path: Path, message: str = "") -> Path:
+    """A fake apptainer whose `build` dies with the unprivileged-build FATAL
+    (the exact failure seen on HPC hosts without fakeroot or user namespaces).
+    Non-build subcommands succeed so def-file generation is unaffected."""
+    bin_dir = tmp_path / "fbin"
+    bin_dir.mkdir(exist_ok=True)
+    fatal = message or "Building from a definition file requires root or some kind of fake root"
+    script = bin_dir / "apptainer"
+    script.write_text(
+        "#!/bin/sh\n"
+        'echo "INFO:    User not listed in /etc/subuid, trying root-mapped namespace"\n'
+        'echo "INFO:    Could not start root-mapped namespace" >&2\n'
+        'echo "INFO:    fakeroot command not found" >&2\n'
+        f'echo "FATAL:   {fatal}" >&2\n'
+        "exit 255\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return bin_dir
+
+
+@pytest.fixture()
+def no_privilege_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """Container dir + an apptainer that always fails unprivileged builds."""
+    from agentic_workspace import container_build, oci
+
+    cdir = make_fake_container_dir(tmp_path)
+    bin_dir = install_privilege_failing_apptainer(tmp_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(container_build, "container_dir", lambda: cdir)
+    monkeypatch.setattr(oci, "is_linux", lambda: True)
+    monkeypatch.setattr(oci, "apptainer_available", lambda: True)
+    monkeypatch.delenv("AGENTIC_BEST_EFFORT_BUILD", raising=False)
+    container_build._privilege_guidance_shown = False
+    return cdir, cdir / ".apptainer"
+
+
+def test_privilege_failure_fails_loudly_with_guidance(
+    no_privilege_env, capsys: pytest.CaptureFixture
+) -> None:
+    """An explicit build (no best-effort env) must fail and tell the user
+    what to ask their admin for — not just re-show apptainer's FATAL."""
+    from agentic_workspace import container_build
+
+    assert container_build.build_base_image("apptainer", force=True) == 255
+    out = capsys.readouterr().out
+    assert "requires root or some kind of fake root" in out  # apptainer's FATAL
+    assert "apptainer config fakeroot --add" in out
+
+
+def test_best_effort_keeps_existing_sif(
+    no_privilege_env, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """update (AGENTIC_BEST_EFFORT_BUILD=1) must keep a previously built SIF
+    when the host cannot build unprivileged — and must not record the new
+    fingerprint for an image that was never rebuilt."""
+    from agentic_workspace import container_build
+
+    cdir, app_dir = no_privilege_env
+    sif = app_dir / "agentic-blueprint-base.sif"
+    fp = app_dir / "agentic-blueprint-base.fingerprint"
+    app_dir.mkdir(parents=True)
+    sif.write_bytes(b"old sif")
+    fp.write_text("stale-fingerprint\n")
+
+    monkeypatch.setenv("AGENTIC_BEST_EFFORT_BUILD", "1")
+    assert container_build.build_base_image("apptainer", force=True) == 0
+    captured = capsys.readouterr()
+    assert "keeping the previous image" in captured.out + captured.err
+    assert sif.read_bytes() == b"old sif"
+    assert fp.read_text() == "stale-fingerprint\n"  # not claimed as rebuilt
+
+
+def test_best_effort_without_existing_sif_still_fails(no_privilege_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Best effort only bridges a failed rebuild over an existing image; with
+    no SIF at all there is nothing to keep, so the build must fail."""
+    from agentic_workspace import container_build
+
+    monkeypatch.setenv("AGENTIC_BEST_EFFORT_BUILD", "1")
+    assert container_build.build_base_image("apptainer", force=True) == 255
+
+
+def test_other_build_failures_are_not_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the privilege FATAL degrades to best effort; a network or recipe
+    error must still fail the update even when an old SIF exists."""
+    from agentic_workspace import container_build, oci
+
+    cdir = make_fake_container_dir(tmp_path)
+    bin_dir = install_privilege_failing_apptainer(
+        tmp_path, message="While performing build: conveyor failed to get: unexpected status code"
+    )
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(container_build, "container_dir", lambda: cdir)
+    monkeypatch.setattr(oci, "is_linux", lambda: True)
+    monkeypatch.setattr(oci, "apptainer_available", lambda: True)
+    container_build._privilege_guidance_shown = False
+    app_dir = cdir / ".apptainer"
+    app_dir.mkdir(parents=True)
+    (app_dir / "agentic-blueprint-base.sif").write_bytes(b"old sif")
+
+    monkeypatch.setenv("AGENTIC_BEST_EFFORT_BUILD", "1")
+    assert container_build.build_base_image("apptainer", force=True) == 255
+
+
+def test_privilege_guidance_printed_once_per_process(
+    no_privilege_env, capsys: pytest.CaptureFixture
+) -> None:
+    """update drives several builds per run; the long admin guidance must
+    appear once per process, not after every failed attempt."""
+    from agentic_workspace import container_build
+
+    container_build.build_base_image("apptainer", force=True)
+    container_build.build_base_image("apptainer", force=True)
+    out = capsys.readouterr().out
+    assert out.count("apptainer config fakeroot --add") == 1
+    assert out.count("requires root or some kind of fake root") == 2  # both FATALs
+
+
+def make_fake_instance(tmp_path: Path, name: str = "demo") -> Path:
+    inst = tmp_path / "inst" / name
+    (inst / "container").mkdir(parents=True)
+    (inst / "manifest.yaml").write_text(f"name: {name}\nimage: {name}:latest\ntool: pi\n")
+    (inst / "container" / "Dockerfile").write_text(
+        "FROM agentic-blueprint:base\n"
+        "COPY commands/ /home/.claude/commands/\n"
+        "ENTRYPOINT [\"/entrypoint.py\"]\n"
+    )
+    (inst / "container" / "commands").mkdir()
+    (inst / "container" / "commands" / "plan.md").write_text("# plan\n")
+    return inst
+
+
+def test_instance_build_best_effort_keeps_sif(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The instance layer degrades the same way: keep the previous instance
+    SIF with a warning instead of failing update on a no-fakeroot host."""
+    from agentic_workspace import container_build, oci
+
+    inst = make_fake_instance(tmp_path)
+    cdir = make_fake_container_dir(tmp_path)
+    monkeypatch.setattr(container_build, "container_dir", lambda: cdir)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+    bin_dir = install_privilege_failing_apptainer(tmp_path)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(oci, "is_linux", lambda: True)
+    monkeypatch.setattr(oci, "apptainer_available", lambda: True)
+    container_build._privilege_guidance_shown = False
+
+    # a previously built base + instance SIF, marked stale by new inputs
+    app_dir = cdir / ".apptainer"
+    app_dir.mkdir(parents=True)
+    (app_dir / "agentic-blueprint-base.sif").write_bytes(b"base sif")
+    (app_dir / "agentic-blueprint-base.fingerprint").write_text("stale\n")
+    inst_sif_dir = inst / ".apptainer"
+    inst_sif_dir.mkdir()
+    inst_sif = inst_sif_dir / "demo.sif"
+    inst_sif.write_bytes(b"demo sif")
+
+    monkeypatch.setenv("AGENTIC_BEST_EFFORT_BUILD", "1")
+    assert container_build.build_instance_image(inst, "apptainer") == 0
+    captured = capsys.readouterr()
+    assert "keeping the previous image" in captured.out + captured.err
+    assert inst_sif.read_bytes() == b"demo sif"

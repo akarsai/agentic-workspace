@@ -145,6 +145,15 @@ python3 container/build_base.py --apptainer  # → container/.apptainer/agentic-
   generated `%post` runs `apt-get` as root (`APT::Sandbox::User=root`) so
   package installs still work. This is build-time only. The SIF matches a
   Docker build.
+- On hosts where even the root-mapped namespace cannot start (no
+  `/etc/subuid` entry, user namespaces disabled, no `fakeroot` command),
+  `apptainer build` fails with "requires root or some kind of fake root".
+  Builds then need an admin fix — `sudo apptainer config fakeroot --add
+  $USER` (plus the `uidmap` package), enabled unprivileged user namespaces,
+  or the `fakeroot` package — or a host that allows builds (copy the `.sif`
+  files over). `./agentic-workspace update` degrades to best effort there:
+  it keeps previously built SIFs with a warning instead of failing, while
+  explicit build commands fail loudly with this guidance.
 
 ### Multi-node dispatch (Slurm + Apptainer)
 

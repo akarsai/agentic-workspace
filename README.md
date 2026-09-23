@@ -186,6 +186,8 @@ The full model and its limits are in [SECURITY.md](SECURITY.md).
 
 - **`agre: command not found`**: add `~/.local/bin` to `PATH` (`export PATH="$HOME/.local/bin:$PATH"`), the installer prints this hint too.
 - **`docker not found on PATH`**: install Docker, or use Apptainer with `./agentic-workspace install --apptainer` (Linux, no daemon needed).
+- **`FATAL: Building from a definition file requires root or some kind of fake root`** (Apptainer): the host allows neither fakeroot nor user namespaces for your user, so Apptainer cannot build images. Ask an admin to run `sudo apptainer config fakeroot --add $USER` (adds the `/etc/subuid` + `/etc/subgid` entries; needs the `uidmap` package), or to enable unprivileged user namespaces — or build on a host that allows it (e.g. with Docker) and copy the `.sif` files over. `update` keeps previously built images in the meantime (with a warning); explicit `--build` commands fail until the host allows builds.
+- **`update` says `docker not found` although the instances use Apptainer**: fixed — a plain `update` now takes the runtime from the instances' config (or pass `--apptainer`, `--runtime apptainer` or `--tool apptainer` explicitly).
 - **`build` says nothing to build**: no instance selection exists yet, run `./agentic-workspace install` once, or name an instance explicitly.
 - **Tools in the image feel stale**: a plain rebuild never moves a tool, run `./agentic-workspace update` (refreshes version pins and rebuilds).
 - **Jobs referencing `/workspace` fail on compute nodes**: the path only exists inside the container, use the shipped `scripts/submit.sh` on Slurm clusters.

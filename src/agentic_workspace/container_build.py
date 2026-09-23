@@ -13,6 +13,14 @@ Base image policy:
   survives as a memo for prerequisite checks: build_instance_image skips the
   (minutes-long) base rebuild when the recorded inputs are unchanged, so
   `build --apptainer` rebuilds the shared base once, not once per instance.
+
+Unprivileged builds: many HPC sites allow neither root nor fakeroot nor
+user namespaces, so `apptainer build` from a definition file dies with
+"Building from a definition file requires root or some kind of fake root".
+When a previous SIF exists, `update` (which sets AGENTIC_BEST_EFFORT_BUILD=1)
+keeps it and continues instead of failing the whole update; explicit build
+commands still fail loudly with admin-facing guidance, because there the
+user asked for a rebuild and must not be handed a stale image in silence.
 """
 from __future__ import annotations
 
@@ -34,6 +42,24 @@ FINGERPRINT_FILES = ("Dockerfile.base", "entrypoint.py", "dockerfile_to_def.py",
 # build inputs just like the recipe files, so a change to any of them must
 # mark a previously built SIF as stale.
 FINGERPRINT_DIRS = ("extensions", "agents")
+
+# apptainer/singularity FATAL lines for "cannot build unprivileged": matched
+# against the captured build output so the failure can be explained (and, for
+# update, degraded gracefully) instead of left as a bare FATAL.
+_PRIVILEGE_FAILURE_MARKERS = (
+    "requires root or some kind of fake root",  # apptainer >= 1.1
+    "requires root privileges",                # older apptainer
+    "you must be root to build",               # singularity <= 3.x
+)
+
+# Set by `update` (and inherited by every build subprocess it spawns): on a
+# privilege failure, keep a previously built SIF and carry on with a warning
+# instead of failing the update. Explicit build commands leave it unset.
+BEST_EFFORT_ENV = "AGENTIC_BEST_EFFORT_BUILD"
+
+# The guidance block is long; once per process is plenty (update and each
+# launcher-driven build are separate processes, so it stays visible).
+_privilege_guidance_shown = False
 
 
 def _base_image() -> str:
@@ -76,6 +102,58 @@ def _base_needs_rebuild(sif: Path, fingerprint_file: Path) -> bool:
     return fingerprint_file.read_text().strip() != base_fingerprint()
 
 
+def _run_apptainer_build(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> tuple[int, str]:
+    """Run `apptainer build`, echoing its output while collecting it, so a
+    privilege FATAL can be recognised afterwards. stderr is merged in: that
+    is where apptainer writes its INFO/FATAL lines."""
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    chunks: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        print(line, end="")
+        chunks.append(line)
+    rc = proc.wait()
+    return rc, "".join(chunks)
+
+
+def _is_privilege_failure(output: str) -> bool:
+    return any(marker in output for marker in _PRIVILEGE_FAILURE_MARKERS)
+
+
+def _print_privilege_guidance(sif: Path | None = None) -> None:
+    """Explain the unprivileged-build FATAL and what unblocks it."""
+    global _privilege_guidance_shown
+    if _privilege_guidance_shown:
+        return
+    _privilege_guidance_shown = True
+    warn("Apptainer cannot build from a definition file as your user on this host:")
+    warn("it needs root, a fakeroot mapping, or unprivileged user namespaces, and none worked.")
+    print()
+    print("Ask your cluster admin for one of:")
+    print("  - a fakeroot mapping for your user (adds /etc/subuid + /etc/subgid entries):")
+    print("      sudo apptainer config fakeroot --add $USER   # needs the 'uidmap' package")
+    print("  - enabled unprivileged user namespaces (root-mapped builds), or")
+    print("  - the 'fakeroot' package installed on the host")
+    print("Alternatives (no admin needed):")
+    print("  - build the image on a host that allows it (e.g. with Docker) and copy the SIF over")
+    if sif is not None:
+        print(f"      expected here: {sif}")
+
+
+def _handle_build_failure(rc: int, output: str, sif: Path) -> int:
+    """Common tail for a failed apptainer build: explain privilege failures,
+    and in best-effort mode (update) keep a previously built SIF."""
+    if _is_privilege_failure(output):
+        _print_privilege_guidance(sif)
+        if os.environ.get(BEST_EFFORT_ENV) == "1" and sif.is_file():
+            warn(f"keeping the previous image: {sif}")
+            warn("  it still runs, but this update could not rebuild it on this host")
+            return 0
+    return rc
+
+
 def build_base_image(runtime: str, *, force: bool = False) -> int:
     if runtime == "apptainer":
         if not oci.is_linux():
@@ -103,13 +181,13 @@ def build_base_image(runtime: str, *, force: bool = False) -> int:
             )
         # Apptainer resolves %files COPY sources relative to the build CWD, so
         # run from the Dockerfile's context directory.
-        rc = subprocess.call(
+        rc, output = _run_apptainer_build(
             ["apptainer", "build", "--force", str(sif), str(def_file)],
             cwd=container_dir(),
         )
         def_file.unlink(missing_ok=True)
         if rc != 0:
-            return rc
+            return _handle_build_failure(rc, output, sif)
         fingerprint_file.write_text(base_fingerprint() + "\n")
         print()
         print(f"Apptainer base image built: {sif}")
@@ -192,14 +270,14 @@ def build_instance_image(instance: Path, runtime: str) -> int:
                 stdout=out,
                 check=True,
             )
-        rc = subprocess.call(
+        rc, output = _run_apptainer_build(
             ["apptainer", "build", "--force", str(sif), str(def_file)],
             cwd=instance / "container",
             env=env,
         )
         def_file.unlink(missing_ok=True)
         if rc != 0:
-            return rc
+            return _handle_build_failure(rc, output, sif)
         print()
         print(f"Apptainer image built: {sif}")
         print()
