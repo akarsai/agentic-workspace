@@ -463,6 +463,68 @@ def test_dockerfile_to_def_rejects_malformed_build_arg(tmp_path: Path) -> None:
     assert "KEY=VALUE" in result.stderr
 
 
+def test_dockerfile_to_def_workarounds_gated_on_chgrp_probe(tmp_path: Path) -> None:
+    """The root-mapped-namespace workarounds (group rewrite to GID 0, the
+    base image's _ssh statoverride) must only run when chgrp to an unmapped
+    gid actually fails. Under the fakeroot command — how locked-down hosts
+    build — chgrp is faked and /etc/group is bind-mounted, so running them
+    anyway dies (`sed -i` renames the file: EBUSY) instead of being the
+    no-op it was meant to be."""
+    converter = REPO_ROOT / "blueprint" / "container" / "dockerfile_to_def.py"
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:26.04\nRUN true\n")
+    for mode, extra in (("base", []), ("instance", ["--base-sif", "/base.sif"])):
+        result = subprocess.run(
+            [sys.executable, str(converter), "--mode", mode, *extra, str(dockerfile)],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        lines = result.stdout.splitlines()
+        probe = next(i for i, l in enumerate(lines) if l.strip().startswith("if ! chgrp 1 "))
+        sed = next(i for i, l in enumerate(lines) if "sed -i -E" in l and "/etc/group" in l)
+        close = next(i for i, l in enumerate(lines) if i > sed and l.strip() == "fi")
+        assert probe < sed < close, f"{mode}: workaround must sit inside the chgrp gate"
+        if mode == "base":
+            assert any("dpkg-statoverride --add" in l for l in lines[probe:close])
+        else:
+            assert not any("dpkg-statoverride" in l for l in lines)
+        # and the whole %post must stay valid shell
+        post = result.stdout.split("%post\n", 1)[1]
+        body = "\n".join(l[4:] for l in post.splitlines() if l.startswith("    "))
+        assert subprocess.run(["sh", "-n"], input=body, text=True).returncode == 0
+
+
+def test_dockerfile_to_def_precreates_ssh_group_without_groupadd(tmp_path: Path) -> None:
+    """openssh-client's postinst creates the _ssh group with groupadd, which
+    renames /etc/group — impossible when Apptainer's fakeroot engine
+    bind-mounts it ('failure while writing changes', EBUSY on the rename).
+    The base recipe must pre-create the group itself, in every build mode,
+    via append (opens the file, never renames it) with a dynamically chosen
+    free gid, and without ever invoking groupadd/addgroup."""
+    converter = REPO_ROOT / "blueprint" / "container" / "dockerfile_to_def.py"
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:26.04\nRUN true\n")
+    result = subprocess.run(
+        [sys.executable, str(converter), "--mode", "base", str(dockerfile)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert not any("groupadd" in l or " addgroup " in l for l in lines)
+    guard = next(i for i, l in enumerate(lines) if "getent group _ssh" in l)
+    append = next(i for i, l in enumerate(lines) if l.strip().startswith('echo "_ssh:x:'))
+    assert append > guard
+    assert ">> /etc/group" in lines[append]
+    # dynamic free-gid scan: the loop reads getent, not a hardcoded gid
+    assert any("getent group \"$__agentic_gid\"" in l for l in lines)
+    # instance recipes have no openssh-client and must not carry the block
+    result = subprocess.run(
+        [sys.executable, str(converter), "--mode", "instance", "--base-sif", "/b.sif", str(dockerfile)],
+        capture_output=True, text=True,
+    )
+    assert "_ssh" not in result.stdout
+
+
 # --- interactive subcommands -------------------------------------------
 
 

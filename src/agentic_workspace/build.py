@@ -20,6 +20,13 @@ from .util import die, run_with_apptainer_fallback, say, warn
 
 DEFAULT_BIN_DIR = Path.home() / ".local" / "bin"
 
+# Set by `update` around its launcher-driven instance rebuilds: the base was
+# just built by update itself, so this build may take the fingerprint-based
+# skip for the base step instead of forcing a second full SIF build (SIF
+# builds have no layer cache — on a fakeroot-only host that halves the
+# update time). Explicit `--build` invocations leave it unset and force.
+TRUST_BASE_ENV = "AGENTIC_TRUST_BASE_FINGERPRINT"
+
 
 def ensure_runtime(runtime: str) -> int:
     if oci.which(runtime) is not None:
@@ -86,9 +93,14 @@ def main(argv: list[str], agent_root: Path | None = None) -> int:
         return 1
 
     if runtime == "apptainer":
-        base_rc = run_with_apptainer_fallback(
-            [sys.executable, "-m", "agentic_workspace.container_build", "base", "apptainer", "--force"]
-        )
+        # `update` sets AGENTIC_TRUST_BASE_FINGERPRINT after building the base
+        # itself: this build may then take the fingerprint-based skip instead
+        # of re-running a full (cache-less, slow) SIF build. A stale or
+        # missing fingerprint still rebuilds, so nothing gets served stale.
+        base_cmd = [sys.executable, "-m", "agentic_workspace.container_build", "base", "apptainer"]
+        if os.environ.get("AGENTIC_TRUST_BASE_FINGERPRINT") != "1":
+            base_cmd.append("--force")
+        base_rc = run_with_apptainer_fallback(base_cmd)
     else:
         base_rc = container_build.build_base_image("docker")
     if base_rc != 0:

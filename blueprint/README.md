@@ -143,17 +143,33 @@ python3 container/build_base.py --apptainer  # → container/.apptainer/agentic-
   explicitly to build others.
 - On hosts without fakeroot/subuid (Apptainer's root-mapped namespace), the
   generated `%post` runs `apt-get` as root (`APT::Sandbox::User=root`) so
-  package installs still work. This is build-time only. The SIF matches a
-  Docker build.
+  package installs still work; it pre-creates openssh-client's `_ssh` group
+  itself (appending to `/etc/group` — a rename via groupadd/addgroup cannot
+  work when Apptainer's fakeroot engine bind-mounts the file), and the
+  group-related postinst workarounds (mapping `/etc/group` gids to 0, the
+  `_ssh` statoverride) kick in — gated at runtime on a `chgrp` probe,
+  because under the fakeroot command `chgrp` is faked and always succeeds
+  while `sed -i /etc/group` cannot rename the bind-mounted file (EBUSY).
+  This is build-time only. The SIF matches a Docker build.
 - On hosts where even the root-mapped namespace cannot start (no
   `/etc/subuid` entry, user namespaces disabled, no `fakeroot` command),
   `apptainer build` fails with "requires root or some kind of fake root".
-  Builds then need an admin fix — `sudo apptainer config fakeroot --add
-  $USER` (plus the `uidmap` package), enabled unprivileged user namespaces,
-  or the `fakeroot` package — or a host that allows builds (copy the `.sif`
-  files over). `./agentic-workspace update` degrades to best effort there:
-  it keeps previously built SIFs with a warning instead of failing, while
-  explicit build commands fail loudly with this guidance.
+  Every build is then retried once with a private userspace fakeroot
+  (`src/agentic_workspace/fakeroot.py` downloads checksum-pinned
+  fakeroot+libfakeroot debs into `~/.cache/agentic-workspace`, extracts
+  them with a pure-stdlib deb reader, smoke-tests that chown/stat actually
+  interpose on this host, and puts `fakeroot-sysv` first on the build's
+  `PATH`): a setuid Apptainer runs `%post` and the final squashfs pack
+  under the fakeroot command, no privileges needed, so on most locked-down
+  login nodes the retry just builds the image. The retry is skipped
+  without a download when Apptainer is not a setuid install (it refuses
+  before ever consulting a fakeroot command) — there, builds need an
+  admin fix — `sudo apptainer config fakeroot --add $USER` (plus the
+  `uidmap` package), enabled unprivileged user namespaces, or the
+  `fakeroot` package — or a host that allows builds (copy the `.sif`
+  files over). `./agentic-workspace update` degrades to best effort
+  there: it keeps previously built SIFs with a warning instead of
+  failing, while explicit build commands fail loudly with this guidance.
 
 ### Multi-node dispatch (Slurm + Apptainer)
 

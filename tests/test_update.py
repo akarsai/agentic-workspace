@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def update_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Isolated HOME + an installed fake launcher named 'agre'."""
     import agentic_workspace.update as update_mod
+    from test_container_build import write_exec
 
     home = tmp_path / "home"
     home.mkdir()
@@ -22,9 +23,7 @@ def update_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     bin_dir = home / ".local" / "bin"
     bin_dir.mkdir(parents=True)
-    launcher = bin_dir / "agre"
-    launcher.write_text("#!/bin/sh\n")
-    launcher.chmod(0o755)
+    write_exec(bin_dir / "agre", "#!/bin/sh\n")
     monkeypatch.setenv("BIN_DIR", str(bin_dir))
     monkeypatch.delenv("AGENTIC_BEST_EFFORT_BUILD", raising=False)
     monkeypatch.delenv("AGENTIC_DOCKER_PULL", raising=False)
@@ -104,6 +103,51 @@ def test_update_sets_best_effort_for_builds(update_env, monkeypatch) -> None:
     monkeypatch.setattr(update_mod, "run_with_apptainer_fallback", lambda cmd: 0)
     assert update_mod.main(["--apptainer", "--no-tools"]) == 0
     assert os.environ.get("AGENTIC_BEST_EFFORT_BUILD") == "1"
+
+
+def test_update_lets_instance_builds_skip_forced_base(update_env, monkeypatch) -> None:
+    """update rebuilds the base itself before the instances; the launcher-
+    driven instance builds must then export the trust flag so their own base
+    step takes the fingerprint skip instead of re-running a full (cache-less,
+    slow) SIF build."""
+    update_mod, bin_dir = update_env
+    seen: list[dict[str, str]] = []
+
+    def fake_run(cmd):
+        seen.append(dict(os.environ))
+        return 0
+
+    monkeypatch.setattr(update_mod, "run_with_apptainer_fallback", fake_run)
+    monkeypatch.delenv("AGENTIC_TRUST_BASE_FINGERPRINT", raising=False)
+    assert update_mod.main(["--apptainer", "--no-tools"]) == 0
+    assert len(seen) >= 2
+    # update's own base build runs before the flag is set (it forces),
+    assert seen[0].get("AGENTIC_TRUST_BASE_FINGERPRINT") is None
+    # and the launcher-driven instance build inherits it.
+    assert seen[-1]["AGENTIC_TRUST_BASE_FINGERPRINT"] == "1"
+
+
+def test_build_trust_flag_drops_forced_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """build.main honors the trust flag: without it the base step forces
+    (explicit builds), with it the fingerprint decides."""
+    import agentic_workspace.build as build_mod
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(build_mod, "ensure_runtime", lambda runtime: 0)
+    monkeypatch.setattr(
+        build_mod, "run_with_apptainer_fallback", lambda cmd: calls.append(cmd) or 0
+    )
+    monkeypatch.setattr(build_mod.interactive, "read_marker", lambda: ["agre"])
+    monkeypatch.delenv("AGENTIC_TRUST_BASE_FINGERPRINT", raising=False)
+
+    build_mod.main(["--apptainer"])
+    assert any("--force" in c for c in calls)
+
+    calls.clear()
+    monkeypatch.setenv("AGENTIC_TRUST_BASE_FINGERPRINT", "1")
+    build_mod.main(["--apptainer"])
+    base_calls = [c for c in calls if "base" in c]
+    assert base_calls and all("--force" not in c for c in base_calls)
 
 
 def test_refresh_tool_pins_distinguishes_checksum_only_changes(

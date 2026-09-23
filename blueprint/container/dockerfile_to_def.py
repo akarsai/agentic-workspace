@@ -195,34 +195,53 @@ def convert(dockerfile, mode, base_sif, default_entrypoint, build_args=None):
         out.append("    mkdir -p /etc/apt/apt.conf.d")
         out.append('    printf \'APT::Sandbox::User "root";\\n\' > /etc/apt/apt.conf.d/99-agentic-root-apt')
         # WORKAROUND (remove when Apptainer fakeroot/subuid is available):
-        # In Apptainer's root-mapped namespace only UID/GID 0 are mapped, so a
-        # package postinst doing `chown root:<group>` or `chgrp <group>` to any
-        # other group fails (EINVAL) and dpkg aborts (e.g. fontconfig-config's
-        # `chown root:staff /usr/local/share/fonts`). Rewriting every existing
-        # system group in /etc/group to GID 0 makes those chowns resolve to the
-        # one mapped GID and succeed. Applies to both base and instance recipes.
-        # Harmless on Docker (never uses this recipe).
-        out.append("    # WORKAROUND-BEGIN: map system groups to GID 0 (root-mapped namespace)")
-        out.append("    sed -i -E 's/^([^:]+):([^:]+):[0-9]+:/\\1:\\2:0:/' /etc/group")
-        out.append("    # WORKAROUND-END")
+        # openssh-client's postinst creates the _ssh group via groupadd /
+        # addgroup, which commit the change by RENAMING /etc/group. Under the
+        # fakeroot command Apptainer bind-mounts a synthesized /etc/group
+        # into the build container (container_linux.go), so /etc/group is a
+        # mount point: the rename dies ("failure while writing changes to
+        # /etc/group", dpkg aborts). In the root-mapped namespace the
+        # postinst's chgrp _ssh fails (EINVAL) instead. Pre-creating the
+        # group sidesteps both: the postinst checks getent and skips its
+        # groupadd entirely. Appending works where renaming cannot, because
+        # the bind is a writable per-session file. Only for the base image
+        # (openssh-client lives there); harmless on Docker.
         if mode == "base":
-            # WORKAROUND (remove when Apptainer fakeroot/subuid is available):
-            # openssh-client's postinst does `chgrp _ssh /usr/bin/ssh-agent`.
-            # In Apptainer's root-mapped namespace only UID/GID 0 are mapped,
-            # so chgrp to the _ssh group's GID fails (EINVAL) and dpkg aborts.
-            # A dpkg-statoverride with group `root` (GID 0, mapped) makes dpkg
-            # apply root:root ownership at unpack and makes the postinst skip
-            # its addgroup/chgrp/chmod. ssh-agent ends up setgid-root instead
-            # of setgid-_ssh, which is functionally identical for the sandbox.
-            # The _ssh group is still pre-created so the postinst's `addgroup`
-            # is skipped. Harmless on Docker (never uses this recipe).
-            out.append("    # WORKAROUND-BEGIN: openssh-client _ssh group (root-mapped namespace)")
-            out.append("    getent group _ssh >/dev/null 2>&1 \\")
-            out.append("        || addgroup --system --quiet --force-badname _ssh 2>/dev/null \\")
-            out.append("        || echo '_ssh:x:117:' >> /etc/group")
-            out.append("    dpkg-statoverride --list /usr/bin/ssh-agent >/dev/null 2>&1 \\")
-            out.append("        || dpkg-statoverride --add root root 2755 /usr/bin/ssh-agent 2>/dev/null || true")
+            out.append("    # WORKAROUND-BEGIN: pre-create openssh-client's _ssh group")
+            out.append("    if ! getent group _ssh >/dev/null 2>&1; then")
+            out.append("        __agentic_gid=100")
+            out.append("        while getent group \"$__agentic_gid\" >/dev/null 2>&1; do")
+            out.append("            __agentic_gid=$((__agentic_gid+1))")
+            out.append("        done")
+            out.append("        echo \"_ssh:x:${__agentic_gid}:\" >> /etc/group")
+            out.append("    fi")
             out.append("    # WORKAROUND-END")
+        # WORKAROUND (remove when Apptainer fakeroot/subuid is available):
+        # In Apptainer's root-mapped namespace (unshare -r) only UID/GID 0 are
+        # mapped, so a package postinst doing `chgrp <group>` (or a chown to a
+        # group) for any other gid fails (EINVAL) and dpkg aborts (e.g.
+        # fontconfig-config's `chown root:staff /usr/local/share/fonts`). Two
+        # mitigations exist for that mode: rewriting every system group in
+        # /etc/group to GID 0, and a dpkg-statoverride that makes dpkg apply
+        # root:root to /usr/bin/ssh-agent so its postinst skips the chgrp.
+        # Neither must run under the fakeroot command: chgrp is faked there
+        # and always succeeds (the unmodified postinst even produces the more
+        # faithful image), and `sed -i /etc/group` renames the file, which
+        # dies with EBUSY on the bind-mounted /etc/group. So gate both on the
+        # failure they exist for: chgrp to a gid that is not mapped. Real
+        # root passes the probe too and needs no mitigation either.
+        out.append("    # WORKAROUND-BEGIN: root-mapped namespace (unshare -r) only")
+        out.append(
+            "    if ! chgrp 1 /etc/apt/apt.conf.d/99-agentic-root-apt 2>/dev/null; then"
+        )
+        out.append("        sed -i -E 's/^([^:]+):([^:]+):[0-9]+:/\\1:\\2:0:/' /etc/group")
+        if mode == "base":
+            out.append("        dpkg-statoverride --list /usr/bin/ssh-agent >/dev/null 2>&1 \\")
+            out.append(
+                "            || dpkg-statoverride --add root root 2755 /usr/bin/ssh-agent 2>/dev/null || true"
+            )
+        out.append("    fi")
+        out.append("    # WORKAROUND-END")
         out.extend(post_lines)
         if workdir:
             # Docker's WORKDIR creates the directory; Apptainer's %post has no

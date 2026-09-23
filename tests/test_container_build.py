@@ -4,7 +4,6 @@ A fake `apptainer` on PATH records every invocation, so the tests can tell a
 real rebuild from the fingerprint memo skip without needing Apptainer.
 """
 import os
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +11,16 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def write_exec(path: Path, body: str) -> None:
+    """Create an executable script in one step: the file is born with the
+    exec bit set. The two-step write_text()+chmod() raced on lustre-like
+    /tmp — a subprocess occasionally exec'ed the script before the chmod
+    metadata was visible (PermissionError), which made the suite flaky."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o755)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(body)
 
 
 def make_fake_container_dir(tmp_path: Path) -> Path:
@@ -41,13 +50,13 @@ def install_fake_apptainer(tmp_path: Path) -> tuple[Path, Path]:
     bin_dir.mkdir()
     log = tmp_path / "apptainer.log"
     script = bin_dir / "apptainer"
-    script.write_text(
+    write_exec(
+        script,
         "#!/bin/sh\n"
         f'echo "apptainer $@" >> "{log}"\n'
         'if [ "$1" = "build" ]; then touch "$3"; fi\n'
-        "exit 0\n"
+        "exit 0\n",
     )
-    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return bin_dir, log
 
 
@@ -197,12 +206,12 @@ def install_fake_docker(tmp_path: Path) -> tuple[Path, Path]:
     bin_dir.mkdir()
     log = tmp_path / "docker.log"
     script = bin_dir / "docker"
-    script.write_text(
+    write_exec(
+        script,
         "#!/bin/sh\n"
         f'echo "docker $*" >> "{log}"\n'
-        "exit 0\n"
+        "exit 0\n",
     )
-    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return bin_dir, log
 
 
@@ -316,21 +325,26 @@ def install_privilege_failing_apptainer(tmp_path: Path, message: str = "") -> Pa
     bin_dir.mkdir(exist_ok=True)
     fatal = message or "Building from a definition file requires root or some kind of fake root"
     script = bin_dir / "apptainer"
-    script.write_text(
+    write_exec(
+        script,
         "#!/bin/sh\n"
         'echo "INFO:    User not listed in /etc/subuid, trying root-mapped namespace"\n'
         'echo "INFO:    Could not start root-mapped namespace" >&2\n'
         'echo "INFO:    fakeroot command not found" >&2\n'
         f'echo "FATAL:   {fatal}" >&2\n'
-        "exit 255\n"
+        "exit 255\n",
     )
-    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return bin_dir
 
 
 @pytest.fixture()
 def no_privilege_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    """Container dir + an apptainer that always fails unprivileged builds."""
+    """Container dir + an apptainer that always fails unprivileged builds.
+
+    The fakeroot rescue is stubbed out (None = nothing provisionable) so
+    these tests exercise the plain failure path deterministically, without
+    network access or a host fakeroot leaking in.
+    """
     from agentic_workspace import container_build, oci
 
     cdir = make_fake_container_dir(tmp_path)
@@ -340,7 +354,13 @@ def no_privilege_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
     monkeypatch.setattr(oci, "is_linux", lambda: True)
     monkeypatch.setattr(oci, "apptainer_available", lambda: True)
     monkeypatch.delenv("AGENTIC_BEST_EFFORT_BUILD", raising=False)
+    monkeypatch.delenv(container_build.FAKEROOT_DIR_ENV, raising=False)
+    monkeypatch.setattr(container_build, "ensure_fakeroot", lambda: None)
+    monkeypatch.setattr(container_build, "cached_fakeroot_dir", lambda: None)
     container_build._privilege_guidance_shown = False
+    container_build._fakeroot_rescue_attempted = False
+    container_build._fakeroot_unrescuable = False
+    container_build._fakeroot_rescue_attempted = False
     return cdir, cdir / ".apptainer"
 
 
@@ -405,11 +425,14 @@ def test_other_build_failures_are_not_swallowed(
     monkeypatch.setattr(oci, "is_linux", lambda: True)
     monkeypatch.setattr(oci, "apptainer_available", lambda: True)
     container_build._privilege_guidance_shown = False
+    container_build._fakeroot_rescue_attempted = False
+    container_build._fakeroot_unrescuable = False
     app_dir = cdir / ".apptainer"
     app_dir.mkdir(parents=True)
     (app_dir / "agentic-blueprint-base.sif").write_bytes(b"old sif")
 
     monkeypatch.setenv("AGENTIC_BEST_EFFORT_BUILD", "1")
+    monkeypatch.setattr(container_build, "cached_fakeroot_dir", lambda: None)
     assert container_build.build_base_image("apptainer", force=True) == 255
 
 
@@ -425,6 +448,170 @@ def test_privilege_guidance_printed_once_per_process(
     out = capsys.readouterr().out
     assert out.count("apptainer config fakeroot --add") == 1
     assert out.count("requires root or some kind of fake root") == 2  # both FATALs
+
+
+@pytest.fixture()
+def clean_fakeroot_memo():
+    """Drop the fakeroot memo env var before and after a test: the rescue
+    path sets it in os.environ (production behavior — it must survive into
+    child processes), which pytest cannot undo on its own."""
+    from agentic_workspace import container_build
+
+    os.environ.pop(container_build.FAKEROOT_DIR_ENV, None)
+    yield
+    os.environ.pop(container_build.FAKEROOT_DIR_ENV, None)
+
+
+def test_privilege_failure_retries_with_fakeroot_and_succeeds(
+    clean_fakeroot_memo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """On the privilege FATAL the build must be retried once with a private
+    userspace fakeroot on PATH (a setuid apptainer runs %post under the
+    fakeroot command). The retry builds for real: fingerprint written, no
+    best-effort warning, no admin guidance."""
+    from agentic_workspace import container_build, oci
+
+    cdir = make_fake_container_dir(tmp_path)
+    fr_dir = tmp_path / "fakeroot"
+    (fr_dir / "bin").mkdir(parents=True)
+    write_exec(fr_dir / "bin" / "fakeroot-sysv", "#!/bin/sh\nexit 0\n")
+
+    # Fails with the privilege FATAL until the private fakeroot is on PATH,
+    # then behaves like a setuid apptainer running the build under it.
+    bin_dir = tmp_path / "fbin"
+    bin_dir.mkdir()
+    log = tmp_path / "apptainer.log"
+    script = bin_dir / "apptainer"
+    write_exec(
+        script,
+        "#!/bin/sh\n"
+        f'echo "apptainer $*" >> "{log }"\n'
+        f'case ":$PATH:" in *":{fr_dir}/bin:"*)\n'
+        '    if [ "$1" = "build" ]; then touch "$3"; fi\n'
+        "    exit 0;;\n"
+        "esac\n"
+        'echo "INFO:    User not listed in /etc/subuid, trying root-mapped namespace" >&2\n'
+        'echo "INFO:    fakeroot command not found" >&2\n'
+        'echo "FATAL:   Building from a definition file requires root or some kind of fake root" >&2\n'
+        "exit 255\n",
+    )
+
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(container_build, "container_dir", lambda: cdir)
+    monkeypatch.setattr(oci, "is_linux", lambda: True)
+    monkeypatch.setattr(oci, "apptainer_available", lambda: True)
+    monkeypatch.delenv("AGENTIC_BEST_EFFORT_BUILD", raising=False)
+    monkeypatch.delenv(container_build.FAKEROOT_DIR_ENV, raising=False)
+
+    def fake_ensure():
+        # the real provisioner memos the dir for child processes
+        os.environ[container_build.FAKEROOT_DIR_ENV] = str(fr_dir)
+        return fr_dir
+
+    monkeypatch.setattr(container_build, "ensure_fakeroot", fake_ensure)
+    monkeypatch.setattr(container_build, "cached_fakeroot_dir", lambda: None)
+    container_build._privilege_guidance_shown = False
+    container_build._fakeroot_rescue_attempted = False
+    container_build._fakeroot_unrescuable = False
+    container_build._fakeroot_rescue_attempted = False
+
+    assert container_build.build_base_image("apptainer", force=True) == 0
+    out = capsys.readouterr().out
+    assert "Retrying the build with the private fakeroot" in out
+    assert "fakeroot command" in out  # the success note
+    assert "apptainer config fakeroot --add" not in out  # no admin guidance
+    # two attempts: the doomed def build, then the fakeroot retry
+    attempts = log.read_text().splitlines()
+    assert len(attempts) == 2
+    # the provisioner memoized the dir so child builds (launcher -> build)
+    # start with the fakeroot on PATH instead of a doomed def attempt
+    import os as _os
+
+    assert _os.environ[container_build.FAKEROOT_DIR_ENV] == str(fr_dir)
+    # and the fingerprint memo says the (rebuilt) SIF is current
+    assert (cdir / ".apptainer" / "agentic-blueprint-base.fingerprint").is_file()
+
+
+def test_cached_fakeroot_preinjected_first_attempt(
+    clean_fakeroot_memo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """When a smoke-passed fakeroot is already cached (a parent process
+    provisioned it during this update), the FIRST build attempt runs with
+    it on PATH: no doomed def build, no 'Retrying' message, one attempt."""
+    from agentic_workspace import container_build, oci
+
+    cdir = make_fake_container_dir(tmp_path)
+    fr_dir = tmp_path / "fakeroot"
+    (fr_dir / "bin").mkdir(parents=True)
+    write_exec(fr_dir / "bin" / "fakeroot-sysv", "#!/bin/sh\nexit 0\n")
+
+    bin_dir = tmp_path / "fbin"
+    bin_dir.mkdir()
+    log = tmp_path / "apptainer.log"
+    script = bin_dir / "apptainer"
+    write_exec(
+        script,
+        "#!/bin/sh\n"
+        f'echo "apptainer $*" >> "{log}"\n'
+        f'case ":$PATH:" in *":{fr_dir}/bin:"*)\n'
+        '    if [ "$1" = "build" ]; then touch "$3"; fi\n'
+        "    exit 0;;\n"
+        "esac\n"
+        'echo "FATAL:   Building from a definition file requires root or some kind of fake root" >&2\n'
+        "exit 255\n",
+    )
+
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr(container_build, "container_dir", lambda: cdir)
+    monkeypatch.setattr(oci, "is_linux", lambda: True)
+    monkeypatch.setattr(oci, "apptainer_available", lambda: True)
+    monkeypatch.delenv("AGENTIC_BEST_EFFORT_BUILD", raising=False)
+    monkeypatch.delenv(container_build.FAKEROOT_DIR_ENV, raising=False)
+    monkeypatch.setattr(container_build, "cached_fakeroot_dir", lambda: fr_dir)
+    container_build._privilege_guidance_shown = False
+    container_build._fakeroot_rescue_attempted = False
+    container_build._fakeroot_unrescuable = False
+
+    assert container_build.build_base_image("apptainer", force=True) == 0
+    out = capsys.readouterr().out
+    assert "Retrying" not in out
+    assert len(log.read_text().splitlines()) == 1  # one attempt only
+
+
+def test_child_skips_doomed_attempt_when_fakeroot_memo_set(
+    clean_fakeroot_memo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the fakeroot memo set by a parent process, the first build already
+    runs with the fakeroot on PATH; if apptainer STILL refuses (non-suid
+    install, no user namespaces) the build must not pointlessly retry —
+    the memo means a retry was already tried upstream."""
+    from agentic_workspace import container_build, oci
+
+    cdir = make_fake_container_dir(tmp_path)
+    bin_dir = install_privilege_failing_apptainer(tmp_path)
+    fr_dir = tmp_path / "fakeroot"
+    (fr_dir / "bin").mkdir(parents=True)
+    (fr_dir / "bin" / "fakeroot-sysv").write_text("#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv(container_build.FAKEROOT_DIR_ENV, str(fr_dir))
+    monkeypatch.setattr(container_build, "container_dir", lambda: cdir)
+    monkeypatch.setattr(oci, "is_linux", lambda: True)
+    monkeypatch.setattr(oci, "apptainer_available", lambda: True)
+    monkeypatch.delenv("AGENTIC_BEST_EFFORT_BUILD", raising=False)
+    calls: list[int] = []
+
+    def counting_ensure() -> None:
+        calls.append(1)
+
+    monkeypatch.setattr(container_build, "ensure_fakeroot", counting_ensure)
+    monkeypatch.setattr(container_build, "cached_fakeroot_dir", lambda: None)
+    container_build._privilege_guidance_shown = False
+    container_build._fakeroot_rescue_attempted = False
+    container_build._fakeroot_unrescuable = False
+    container_build._fakeroot_rescue_attempted = False
+
+    assert container_build.build_base_image("apptainer", force=True) == 255
+    assert calls == []  # no provisioning attempt: the parent already tried
 
 
 def make_fake_instance(tmp_path: Path, name: str = "demo") -> Path:
@@ -458,6 +645,8 @@ def test_instance_build_best_effort_keeps_sif(
     monkeypatch.setattr(oci, "is_linux", lambda: True)
     monkeypatch.setattr(oci, "apptainer_available", lambda: True)
     container_build._privilege_guidance_shown = False
+    container_build._fakeroot_rescue_attempted = False
+    container_build._fakeroot_unrescuable = False
 
     # a previously built base + instance SIF, marked stale by new inputs
     app_dir = cdir / ".apptainer"

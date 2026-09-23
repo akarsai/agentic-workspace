@@ -21,6 +21,12 @@ When a previous SIF exists, `update` (which sets AGENTIC_BEST_EFFORT_BUILD=1)
 keeps it and continues instead of failing the whole update; explicit build
 commands still fail loudly with admin-facing guidance, because there the
 user asked for a rebuild and must not be handed a stale image in silence.
+
+Before any of that gives up, the build is retried once with a private
+userspace fakeroot on PATH (see agentic_workspace.fakeroot): a setuid
+Apptainer runs the whole build under the fakeroot command, which needs no
+privileges at all — on most locked-down login nodes that retry just builds
+the image, and the guidance never appears.
 """
 from __future__ import annotations
 
@@ -31,10 +37,16 @@ import sys
 from pathlib import Path
 
 from . import oci
+from .fakeroot import (
+    FAKEROOT_DIR_ENV,
+    build_env_with_fakeroot,
+    cached_fakeroot_dir,
+    ensure_fakeroot,
+)
 from .manifest import load_manifest
 from .paths import container_dir
 from .tool_versions import build_arg_flags
-from .util import warn
+from .util import ok, say, warn
 
 BASE_IMAGE_DEFAULT = "agentic-blueprint:base"
 FINGERPRINT_FILES = ("Dockerfile.base", "entrypoint.py", "dockerfile_to_def.py", "build_base.py", "versions.json")
@@ -48,9 +60,17 @@ FINGERPRINT_DIRS = ("extensions", "agents")
 # update, degraded gracefully) instead of left as a bare FATAL.
 _PRIVILEGE_FAILURE_MARKERS = (
     "requires root or some kind of fake root",  # apptainer >= 1.1
+    "requires either a suid installation or unprivileged user namespaces",  # non-suid install
     "requires root privileges",                # older apptainer
     "you must be root to build",               # singularity <= 3.x
 )
+
+# Signature of the setuid flow that got all the way to looking for the
+# fakeroot command (internal/pkg/fakeroot.FindFake): providing that command
+# is then the one missing piece, and the fakeroot rescue can work. A
+# non-suid install dies earlier (marker above) and cannot be rescued that
+# way — for it, only an admin fix or a different host helps.
+_FAKEROOT_RESCUE_MARKER = "fakeroot command not found"
 
 # Set by `update` (and inherited by every build subprocess it spawns): on a
 # privilege failure, keep a previously built SIF and carry on with a warning
@@ -60,6 +80,15 @@ BEST_EFFORT_ENV = "AGENTIC_BEST_EFFORT_BUILD"
 # The guidance block is long; once per process is plenty (update and each
 # launcher-driven build are separate processes, so it stays visible).
 _privilege_guidance_shown = False
+
+# Set when the fakeroot rescue was attempted in this process, so the
+# guidance can say so instead of pretending nothing was tried.
+_fakeroot_rescue_attempted = False
+
+# Set when this Apptainer install cannot use the fakeroot command at all
+# (non-suid install, no user namespaces): the rescue path is unavailable
+# however good the fakeroot would be.
+_fakeroot_unrescuable = False
 
 
 def _base_image() -> str:
@@ -105,7 +134,46 @@ def _base_needs_rebuild(sif: Path, fingerprint_file: Path) -> bool:
 def _run_apptainer_build(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> tuple[int, str]:
     """Run `apptainer build`, echoing its output while collecting it, so a
     privilege FATAL can be recognised afterwards. stderr is merged in: that
-    is where apptainer writes its INFO/FATAL lines."""
+    is where apptainer writes its INFO/FATAL lines.
+
+    A privilege FATAL is retried exactly once with the private userspace
+    fakeroot on PATH (setuid Apptainer installs run %post under the
+    fakeroot command — no privileges needed). The memo env var makes child
+    processes (launcher -> build -> this module) prepend it from the start.
+    """
+    global _fakeroot_rescue_attempted, _fakeroot_unrescuable
+    # A good cached fakeroot (or one memoized by a parent process) goes on
+    # PATH before the first attempt: apptainer's FindFake() then uses it
+    # right away instead of failing first and retrying.
+    cached = cached_fakeroot_dir()
+    if cached is not None:
+        os.environ[FAKEROOT_DIR_ENV] = str(cached)
+    run_env = build_env_with_fakeroot(env, fakeroot_dir=cached)
+    rc, output = _run_capture(cmd, cwd, run_env)
+    if rc != 0 and _is_privilege_failure(output):
+        if not _is_fakeroot_rescuable(output):
+            # The install died before it would ever consult a fakeroot
+            # command (non-suid Apptainer without user namespaces): no retry
+            # can help; go straight to guidance / best effort.
+            _fakeroot_unrescuable = True
+            return rc, output
+        if os.environ.get(FAKEROOT_DIR_ENV):
+            # A parent provisioned fakeroot (it is already on PATH via the
+            # memo) and apptainer still refused: retrying cannot help.
+            _fakeroot_rescue_attempted = True
+            return rc, output
+        _fakeroot_rescue_attempted = True
+        root = ensure_fakeroot()
+        if root is not None:
+            say("Retrying the build with the private fakeroot on PATH")
+            run_env = build_env_with_fakeroot(env, fakeroot_dir=root)
+            rc, output = _run_capture(cmd, cwd, run_env)
+            if rc == 0:
+                ok("build succeeded under the fakeroot command")
+    return rc, output
+
+
+def _run_capture(cmd: list[str], cwd: Path, env: dict[str, str]) -> tuple[int, str]:
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
@@ -122,14 +190,28 @@ def _is_privilege_failure(output: str) -> bool:
     return any(marker in output for marker in _PRIVILEGE_FAILURE_MARKERS)
 
 
+def _is_fakeroot_rescuable(output: str) -> bool:
+    """True when apptainer ran out of options at the fakeroot-command step
+    (setuid flow): handing it a fakeroot is then exactly the missing piece."""
+    return _FAKEROOT_RESCUE_MARKER in output and _is_privilege_failure(output)
+
+
 def _print_privilege_guidance(sif: Path | None = None) -> None:
     """Explain the unprivileged-build FATAL and what unblocks it."""
     global _privilege_guidance_shown
     if _privilege_guidance_shown:
         return
     _privilege_guidance_shown = True
-    warn("Apptainer cannot build from a definition file as your user on this host:")
-    warn("it needs root, a fakeroot mapping, or unprivileged user namespaces, and none worked.")
+    if _fakeroot_rescue_attempted:
+        warn("Apptainer still cannot build from a definition file as your user, even with fakeroot:")
+        warn("it needs root, a fakeroot mapping, or unprivileged user namespaces, and none worked.")
+    elif _fakeroot_unrescuable:
+        warn("Apptainer cannot build from a definition file as your user on this host:")
+        warn("this Apptainer install is not setuid and user namespaces are unavailable, so")
+        warn("not even a fakeroot command can help — only an admin fix or another host can.")
+    else:
+        warn("Apptainer cannot build from a definition file as your user on this host:")
+        warn("it needs root, a fakeroot mapping, or unprivileged user namespaces, and none worked.")
     print()
     print("Ask your cluster admin for one of:")
     print("  - a fakeroot mapping for your user (adds /etc/subuid + /etc/subgid entries):")

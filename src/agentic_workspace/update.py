@@ -10,10 +10,15 @@ what is installed), so a plain `update` on an Apptainer install does not
 try to rebuild with a Docker that was never there.
 
 On hosts where apptainer cannot build unprivileged (no root, no fakeroot
-mapping, no user namespaces) update degrades to best effort: an existing
-SIF is kept with a warning instead of failing the update — see
-container_build.BEST_EFFORT_ENV. Explicit build commands still fail loudly.
-A build that fails outright (nothing to keep) makes update exit nonzero.
+mapping, no user namespaces) the build is first retried with a private
+userspace fakeroot on PATH (see agentic_workspace.fakeroot) — a setuid
+Apptainer runs %post under the fakeroot command, which needs no
+privileges, so on most locked-down login nodes update rebuilds for real.
+If even that fails, update degrades to best effort: an existing SIF is
+kept with a warning instead of failing the update — see
+container_build.BEST_EFFORT_ENV. Explicit build commands still fail
+loudly. A build that fails outright (nothing to keep) makes update exit
+nonzero.
 
 Tool freshness: rebuilding alone never moves a tool inside an image (Docker
 freezes a RUN layer until its command text changes), so update first
@@ -58,6 +63,15 @@ def resolved_runtime(names: list[str]) -> tuple[str, str]:
         if runtime in ("docker", "apptainer"):
             return runtime, f"{name}'s config"
     return oci.detect_runtime(), "what is installed"
+
+
+# Set by `update` around its launcher-driven instance rebuilds: the base
+# image was just (re)built by update itself, so the launcher's build may
+# take the fingerprint-based skip for the base step instead of forcing a
+# full second SIF rebuild (SIF builds have no layer cache — on a
+# fakeroot-only host that saves half the update time). Explicit `--build`
+# invocations leave it unset and keep forcing.
+from .build import TRUST_BASE_ENV
 
 
 def rebuild_instance(name: str, runtime: str, bin_dir: Path) -> int:
@@ -181,10 +195,12 @@ def main(argv: list[str]) -> int:
                 "rebuilds. A tool only rebuilds when its pin changed, so an up-to-date\n"
                 "image costs seconds of cache hits.\n"
                 "\n"
-                "On hosts where Apptainer cannot build unprivileged (no fakeroot mapping\n"
-                "or user namespaces), a previously built image is kept with a warning\n"
-                "instead of failing the update; rebuilds then need a host that allows\n"
-                "them or an admin-provided fakeroot mapping."
+                "On hosts where Apptainer cannot build unprivileged, the build is\n"
+                "first retried with a private userspace fakeroot (no admin needed);\n"
+                "if even that fails (no fakeroot mapping, user namespaces, or setuid\n"
+                "Apptainer), a previously built image is kept with a warning instead\n"
+                "of failing the update; rebuilds then need a host that allows them\n"
+                "or an admin-provided fakeroot mapping."
             )
             return 0
         else:
@@ -231,6 +247,7 @@ def main(argv: list[str]) -> int:
         if runtime_flag:
             sync_runtime_in_config(only, runtime)
         say(f"Rebuilding {only}...")
+        os.environ[TRUST_BASE_ENV] = "1"  # update already built the base
         if runtime == "apptainer":
             rc = run_with_apptainer_fallback([str(bin_dir / only), "--apptainer", "--build"])
         else:
@@ -254,6 +271,10 @@ def main(argv: list[str]) -> int:
     else:
         if container_build.build_base_image("docker") != 0:
             failed = 1
+
+    # The base was just rebuilt above; the per-instance builds below may
+    # skip a full second base rebuild when its fingerprint is unchanged.
+    os.environ[TRUST_BASE_ENV] = "1"
 
     for name in names:
         if not (instances_dir() / name).is_dir():
